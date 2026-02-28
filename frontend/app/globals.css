@@ -8,6 +8,21 @@
   --color-surface-border: #27272A;
   --color-text-muted: #a1a1aa;
 
+  /* Luxury Deal Genealogy Palette */
+  --color-lux-black: #020617;
+  --color-lux-sidebar: #09090b;
+  --color-lux-card: #0f172a;
+  --color-lux-gold: #d4af37;
+  --color-lux-amber: #fbbf24;
+  --color-lux-amber-dim: #b45309;
+  --color-lux-text-head: #fde68a;
+  --color-lux-text-body: #d4d4d8;
+  --color-lux-text-muted: #71717a;
+  --color-lux-border: #1e293b;
+  --color-lux-border-active: #451a03;
+
+  --shadow-glow: 0 0 15px -3px rgba(251, 191, 36, 0.15);
+
   --font-display: "Playfair Display", serif;
   --font-mono: "JetBrains Mono", monospace;
   --font-sans: "Inter", sans-serif;

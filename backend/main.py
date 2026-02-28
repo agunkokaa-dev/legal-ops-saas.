@@ -80,11 +80,9 @@ async def get_matters(tenant_id: str):
 async def upload_contract(
     file: UploadFile = File(...),
     tenant_id: str = Form(...),
-    matter_id: str = Form(None)
+    matter_id: str = Form(None),
+    contract_id: str = Form(None)
 ):
-    if not matter_id:
-        raise HTTPException(status_code=400, detail="matter_id is required.")
-
     # Validasi 1: Ekstensi Kasar
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Hanya menerima file berformat PDF.")
@@ -106,8 +104,9 @@ async def upload_contract(
         if not text_content.strip():
             raise HTTPException(status_code=400, detail="Kami tidak dapat membaca dokumen ini. Pastikan PDF tidak dienkripsi atau berupa gambar hasil scan tanpa OCR.")
 
-        contract_id = str(uuid.uuid4())
-        
+        if not contract_id:
+            contract_id = str(uuid.uuid4())
+
         # Invoke the Multi-Agent Workflow
         print(f"Invoking LangGraph for {file.filename}...")
         final_state = clm_graph.invoke({
@@ -125,18 +124,75 @@ async def upload_contract(
         else:
             risk_level = "Low"
 
-        # Update Supabase integration
-        supabase.table("contracts").insert({
-            "id": contract_id, 
-            "tenant_id": tenant_id, 
-            "matter_id": matter_id,
-            "title": file.filename,
-            "contract_value": final_state.get("contract_value", "Unknown"),
-            "end_date": final_state.get("end_date", "Unknown"),
-            "risk_level": risk_level,
-            "counter_proposal": final_state.get("counter_proposal"),
-            "draft_revisions": final_state.get("draft_revisions")
-        }).execute()
+        # Check if record already exists to determine update vs insert (Simpler)
+        existing = supabase.table("contracts").select("id").eq("id", contract_id).execute()
+        
+        if existing.data and len(existing.data) > 0:
+            # We already have a contract seeded (from frontend Storage logic). Update AI outputs.
+            supabase.table("contracts").update({
+                "contract_value": final_state.get("contract_value", "Unknown"),
+                "end_date": final_state.get("end_date", "Unknown"),
+                "risk_level": risk_level,
+                "counter_proposal": final_state.get("counter_proposal"),
+                "draft_revisions": final_state.get("draft_revisions")
+            }).eq("id", contract_id).execute()
+        else:
+            # Standalone dashboard upload. Insert completely new row.
+            supabase.table("contracts").insert({
+                "id": contract_id, 
+                "tenant_id": tenant_id, 
+                "matter_id": matter_id,
+                "title": file.filename,
+                "contract_value": final_state.get("contract_value", "Unknown"),
+                "end_date": final_state.get("end_date", "Unknown"),
+                "risk_level": risk_level,
+                "counter_proposal": final_state.get("counter_proposal"),
+                "draft_revisions": final_state.get("draft_revisions")
+            }).execute()
+        
+        # =====================================================================
+        # DEAL GENEALOGY: Persist Obligations & Clauses from LangGraph Agents
+        # =====================================================================
+        
+        # Insert extracted obligations into contract_obligations
+        obligations = final_state.get("extracted_obligations", [])
+        if obligations:
+            obligations_data = [
+                {
+                    "tenant_id": tenant_id,
+                    "contract_id": contract_id,
+                    "description": ob.get("description", ""),
+                    "due_date": ob.get("due_date"),  # Can be null
+                    "status": "pending"
+                }
+                for ob in obligations if ob.get("description")
+            ]
+            if obligations_data:
+                try:
+                    supabase.table("contract_obligations").insert(obligations_data).execute()
+                    print(f"✅ Inserted {len(obligations_data)} obligations for contract {contract_id}")
+                except Exception as ob_err:
+                    print(f"⚠️ Failed to insert obligations: {ob_err}")
+
+        # Insert classified clauses into contract_clauses
+        clauses = final_state.get("classified_clauses", [])
+        if clauses:
+            clauses_data = [
+                {
+                    "tenant_id": tenant_id,
+                    "contract_id": contract_id,
+                    "clause_type": cl.get("clause_type", "Other"),
+                    "original_text": cl.get("original_text", ""),
+                    "ai_summary": cl.get("ai_summary")
+                }
+                for cl in clauses if cl.get("original_text")
+            ]
+            if clauses_data:
+                try:
+                    supabase.table("contract_clauses").insert(clauses_data).execute()
+                    print(f"✅ Inserted {len(clauses_data)} clauses for contract {contract_id}")
+                except Exception as cl_err:
+                    print(f"⚠️ Failed to insert clauses: {cl_err}")
         
         # Existing Vector Embedding
         response = openai_client.embeddings.create(input=text_content[:8000], model="text-embedding-3-small")

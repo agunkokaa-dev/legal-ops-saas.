@@ -63,32 +63,16 @@ export default function AssistantSidebar() {
 
     return (
         <aside className="flex flex-col w-full h-full overflow-hidden bg-background-dark border-l border-white/10">
-            <div className="h-16 flex items-center px-6 border-b border-surface-border bg-surface shrink-0">
-                <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-primary" />
-                    <h2 className="font-display text-lg text-white">Clause Assistant</h2>
-                </div>
+            <div className="px-5 py-4 border-b border-surface-border/50">
+                <h2 className="text-[10px] uppercase tracking-widest text-text-muted font-semibold">Clause Assistant</h2>
             </div>
-
             <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 relative">
                 {messages.map(msg => (
-                    <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                        {msg.role === 'assistant' ? (
-                            <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center shrink-0 mt-1">
-                                <Command className="w-4 h-4 text-primary" />
-                            </div>
-                        ) : (
-                            <div className="w-8 h-8 rounded bg-white/10 flex items-center justify-center shrink-0 mt-1">
-                                <User className="w-4 h-4 text-white" />
-                            </div>
-                        )}
-                        <div className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : ''} max-w-[85%]`}>
-                            <span className={`text-[10px] font-medium uppercase tracking-wider ${msg.role === 'assistant' ? 'text-primary' : 'text-text-muted'}`}>
-                                {msg.role === 'assistant' ? 'Assistant' : 'You'}
-                            </span>
-                            <div className={`p-3 text-sm leading-relaxed ${msg.role === 'assistant'
-                                ? 'bg-surface-border/30 rounded-lg rounded-tl-none border border-surface-border'
-                                : 'bg-white/5 rounded-lg rounded-tr-none border border-surface-border text-white'
+                    <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`flex flex-col max-w-[90%]`}>
+                            <div className={`p-4 text-sm leading-relaxed ${msg.role === 'assistant'
+                                ? 'bg-surface/50 rounded-2xl border border-surface-border'
+                                : 'bg-primary/10 rounded-2xl border border-primary/20 text-white'
                                 }`}>
                                 {msg.role === 'assistant' ? (
                                     <div className="prose prose-invert prose-sm max-w-none text-gray-300 [&>p]:mb-2 last:[&>p]:mb-0 [&>ul]:mt-1 [&>ul]:mb-2 [&>li]:my-0.5">
@@ -124,13 +108,9 @@ export default function AssistantSidebar() {
                 ))}
 
                 {isLoading && (
-                    <div className="flex gap-3">
-                        <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center shrink-0 mt-1">
-                            <Command className="w-4 h-4 text-primary" />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                            <span className="text-[10px] uppercase font-medium text-primary tracking-wider">Assistant</span>
-                            <div className="bg-surface-border/30 p-4 rounded-lg rounded-tl-none border border-surface-border flex items-center gap-1.5 w-fit">
+                    <div className="flex justify-start">
+                        <div className="flex flex-col max-w-[90%]">
+                            <div className="bg-surface/50 p-4 rounded-2xl border border-surface-border flex items-center gap-1.5 w-fit">
                                 <span className="w-1.5 h-1.5 bg-primary/80 rounded-full animate-bounce"></span>
                                 <span className="w-1.5 h-1.5 bg-primary/80 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
                                 <span className="w-1.5 h-1.5 bg-primary/80 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>

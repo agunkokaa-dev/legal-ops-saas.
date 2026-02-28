@@ -69,9 +69,9 @@ export default function Sidebar() {
                     )
                 })}
             </div>
-            <div className="p-4 border-t border-surface-border hidden lg:flex flex-col gap-4">
+            <div className="flex items-center gap-3 bg-white/5 p-2 rounded justify-between">
                 <OrganizationSwitcher hidePersonal={true} />
-                <div className="flex items-center gap-3 bg-white/5 p-2 rounded justify-between">
+                <div>
                     <UserButton afterSignOutUrl="/" showName />
                 </div>
             </div>

@@ -93,3 +93,93 @@ export async function deleteMatter(matterId: string) {
         return { error: e.message || "Failed to delete matter." }
     }
 }
+
+// 4. Fetch a Single Matter by ID
+export async function getMatterById(matterId: string) {
+    const { userId, orgId } = await auth()
+    if (!userId) return { error: "Unauthorized" }
+
+    const tenantId = orgId || userId
+
+    try {
+        const { data, error } = await supabaseAdmin
+            .from('matters')
+            .select('*')
+            .eq('id', matterId)
+            .eq('tenant_id', tenantId)
+            .single()
+
+        if (error) throw error
+        return { data }
+    } catch (e: any) {
+        return { error: e.message || "Failed to fetch matter." }
+    }
+}
+
+// 5. Fetch Matter Tasks
+export async function getMatterTasks(matterId: string) {
+    const { userId, orgId } = await auth()
+    if (!userId) return { error: "Unauthorized" }
+
+    const tenantId = orgId || userId
+
+    try {
+        const { data, error } = await supabaseAdmin
+            .from('matter_tasks')
+            .select('*')
+            .eq('matter_id', matterId)
+            .eq('tenant_id', tenantId)
+            .order('due_date', { ascending: true })
+
+        if (error) throw error
+        return { data }
+    } catch (e: any) {
+        return { error: e.message || "Failed to fetch matter tasks." }
+    }
+}
+
+// 6. Update Matter Summary
+export async function updateMatterSummary(matterId: string, description: string) {
+    const { userId, orgId } = await auth()
+    if (!userId) return { error: "Unauthorized" }
+
+    const tenantId = orgId || userId
+
+    try {
+        const { error } = await supabaseAdmin
+            .from('matters')
+            .update({ description })
+            .eq('id', matterId)
+            .eq('tenant_id', tenantId)
+
+        if (error) throw error
+
+        revalidatePath(`/dashboard/matters/${matterId}`)
+        return { success: true }
+    } catch (e: any) {
+        return { error: e.message || "Failed to update matter summary." }
+    }
+}
+
+// 7. Toggle Matter Task Status
+export async function toggleMatterTask(taskId: string, isCompleted: boolean, matterId: string) {
+    const { userId, orgId } = await auth()
+    if (!userId) return { error: "Unauthorized" }
+
+    const tenantId = orgId || userId
+
+    try {
+        const { error } = await supabaseAdmin
+            .from('matter_tasks')
+            .update({ is_completed: isCompleted })
+            .eq('id', taskId)
+            .eq('tenant_id', tenantId)
+
+        if (error) throw error
+
+        revalidatePath(`/dashboard/matters/${matterId}`)
+        return { success: true }
+    } catch (e: any) {
+        return { error: e.message || "Failed to toggle matter task." }
+    }
+}

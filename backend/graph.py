@@ -29,6 +29,8 @@ class ContractState(TypedDict):
     risk_score: float             # Calculated risk score (0-100)
     counter_proposal: str         # Negotiation strategy / BATNA reasoning
     draft_revisions: List[Any]    # Revised neutral/fair clauses
+    extracted_obligations: List[Dict[str, Any]]  # Obligations mined from contract
+    classified_clauses: List[Dict[str, Any]]      # Key clauses classified by type
 
 # ==========================================
 # 2. Agent 01: Ingestion Agent
@@ -239,7 +241,103 @@ def drafting_agent(state: ContractState) -> ContractState:
         return {"draft_revisions": [{"error": "Failed to draft revisions."}]}
 
 # ==========================================
-# 7. Graph Orchestration
+# 7. Agent 06: Obligation Miner
+# ==========================================
+def obligation_miner_agent(state: ContractState) -> ContractState:
+    """
+    AGENT 06: Mines the raw document for contractual obligations,
+    deliverables, duties, and commitments (shall, must, agrees to).
+    Returns: extracted_obligations (list of dicts with description and due_date).
+    """
+    print("[Agent 06: Obligation Miner] Extracting contractual obligations...")
+
+    prompt = f"""
+    You are an expert Legal Obligation Analyst.
+    Analyze the following contract text and extract ALL contractual obligations,
+    deliverables, duties, and commitments. Look for keywords like "shall", "must",
+    "agrees to", "is required to", "will", "undertakes to", "covenants".
+
+    For each obligation found, extract:
+    - 'description': A clear, concise description of the obligation.
+    - 'due_date': The specific deadline or date if mentioned (e.g., "2025-06-30"). If no date is mentioned, use null.
+
+    Return pure JSON with a single key 'obligations' containing a list of objects.
+    Each object must have 'description' (string) and 'due_date' (string or null).
+    If no obligations are found, return an empty list.
+
+    CONTRACT TEXT:
+    {state.get('raw_document', '')[:12000]}
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": "You are a precise obligation extraction JSON engine."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    try:
+        result = json.loads(response.choices[0].message.content)
+        return {"extracted_obligations": result.get("obligations", [])}
+    except Exception as e:
+        print(f"Obligation Miner Error: {e}")
+        return {"extracted_obligations": []}
+
+# ==========================================
+# 8. Agent 07: Clause Classifier
+# ==========================================
+def clause_classifier_agent(state: ContractState) -> ContractState:
+    """
+    AGENT 07: Classifies key clauses from the contract into standard legal categories
+    (Indemnity, Termination, Payment, Survival, Confidentiality, etc.)
+    and extracts the original text + AI summary for each.
+    Returns: classified_clauses (list of dicts).
+    """
+    print("[Agent 07: Clause Classifier] Classifying key contract clauses...")
+
+    clauses = state.get('extracted_clauses', {})
+
+    prompt = f"""
+    You are an expert Legal Clause Classifier.
+    Review the following extracted clauses from a contract and classify each one into
+    a standard legal category.
+
+    Valid categories: 'Indemnity', 'Payment', 'Termination', 'Survival',
+    'Confidentiality', 'Liability', 'Force Majeure', 'Governing Law',
+    'Dispute Resolution', 'Intellectual Property', 'Non-Compete', 'Other'.
+
+    For each clause, provide:
+    - 'clause_type': One of the valid categories above.
+    - 'original_text': The exact text or excerpt of this clause.
+    - 'ai_summary': A 1-2 sentence plain-English summary of what this clause means.
+
+    Return pure JSON with a single key 'clauses' containing a list of objects.
+    Each object must have 'clause_type' (string), 'original_text' (string), and 'ai_summary' (string).
+
+    EXTRACTED CLAUSES:
+    {json.dumps(clauses)}
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": "You are a legal clause classification JSON engine."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    try:
+        result = json.loads(response.choices[0].message.content)
+        return {"classified_clauses": result.get("clauses", [])}
+    except Exception as e:
+        print(f"Clause Classifier Error: {e}")
+        return {"classified_clauses": []}
+
+# ==========================================
+# 9. Graph Orchestration
 # ==========================================
 # Initialize the StateGraph with our ContractState
 workflow = StateGraph(ContractState)
@@ -250,16 +348,20 @@ workflow.add_node("compliance", compliance_agent)
 workflow.add_node("risk", risk_agent)
 workflow.add_node("negotiation", negotiation_agent)
 workflow.add_node("drafting", drafting_agent)
+workflow.add_node("obligation_miner", obligation_miner_agent)
+workflow.add_node("clause_classifier", clause_classifier_agent)
 
-# Define the sequential execution flow
+# Define the sequential execution flow (7-Agent Pipeline)
 workflow.set_entry_point("ingestion")
 workflow.add_edge("ingestion", "compliance")
 workflow.add_edge("compliance", "risk")
 workflow.add_edge("risk", "negotiation")
 workflow.add_edge("negotiation", "drafting")
-workflow.add_edge("drafting", END)
+workflow.add_edge("drafting", "obligation_miner")
+workflow.add_edge("obligation_miner", "clause_classifier")
+workflow.add_edge("clause_classifier", END)
 
 # Compile the graph into an executable application
 clm_graph = workflow.compile()
 
-print("LangGraph CLM Multi-Agent Orchestration initialized successfully.")
+print("LangGraph CLM 7-Agent Orchestration initialized successfully.")

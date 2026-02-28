@@ -1,5 +1,6 @@
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@supabase/supabase-js'
 import NewMatterModal from '@/components/NewMatterModal'
 import DeleteMatterModal from '@/components/DeleteMatterModal'
@@ -224,12 +225,14 @@ export default async function MattersDashboard(props: { searchParams?: Promise<{
                                         matters.map((matter) => (
                                             <tr key={matter.id} className="hover:bg-white/[0.02] transition-colors group">
                                                 <td className="px-4 py-4">
-                                                    <div className="font-medium text-white group-hover:text-primary transition-colors">
-                                                        {matter.title || 'Untitled Matter'}
-                                                    </div>
-                                                    <div className="text-[11px] text-text-muted mt-0.5 font-mono">
-                                                        ID-{matter.id.split('-')[0].toUpperCase()}
-                                                    </div>
+                                                    <Link href={`/dashboard/matters/${matter.id}`} className="block group">
+                                                        <div className="font-medium text-white group-hover:text-primary transition-colors">
+                                                            {matter.title || 'Untitled Matter'}
+                                                        </div>
+                                                        <div className="text-[11px] text-text-muted mt-0.5 font-mono group-hover:text-text-muted/80">
+                                                            ID-{matter.id?.split('-')[0]?.toUpperCase() || '0000'}
+                                                        </div>
+                                                    </Link>
                                                 </td>
                                                 <td className="px-4 py-4 flex items-center gap-3">
                                                     <div className="w-6 h-6 rounded-full bg-blue-900/40 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">
