@@ -1,8 +1,12 @@
 import { auth, currentUser } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
-import { syncProfile } from '@/app/actions/syncProfile'
-import DocumentUpload from '@/components/DocumentUpload'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+import { syncProfile } from '@/app/actions/syncProfile'
+import { createClient } from '@supabase/supabase-js'
+import DocumentUpload from '@/components/DocumentUpload'
+import DocumentList from '@/components/DocumentList'
 export default async function DashboardPage() {
     const { userId, orgId, getToken } = await auth()
     const user = await currentUser()
@@ -14,10 +18,71 @@ export default async function DashboardPage() {
     const token = await getToken({ template: 'supabase' })
     const email = user?.primaryEmailAddress?.emailAddress
 
+    let documents: any[] = []
+    let totalPortfolioValue = 0
+    let totalContracts = 0
+    let highRiskCount = 0
+    let mediumRiskCount = 0
+    let lowRiskCount = 0
+
+    const parseContractValue = (valStr: string | null): number => {
+        if (!valStr || valStr.toLowerCase().includes("tidak")) return 0
+        // Strip everything except digits
+        const cleanString = valStr.replace(/[^0-9]/g, '')
+        const parsed = parseInt(cleanString, 10)
+        return isNaN(parsed) ? 0 : parsed
+    }
+
     if (orgId && token && email) {
         // Sync profile to Supabase silently in the background
         void syncProfile(token, userId, email, orgId)
+
+        try {
+            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+            const supabaseAdminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+
+            if (!supabaseUrl || !supabaseAdminKey) {
+                console.error("🚨 CRITICAL: Missing SUPABASE_SERVICE_ROLE_KEY or URL in environment variables.")
+                // Allow page to render empty state by aborting fetch
+            } else {
+                const supabaseAdmin = createClient(supabaseUrl, supabaseAdminKey)
+
+                const tenantId = orgId || userId
+                const { data, error } = await supabaseAdmin
+                    .from('contracts')
+                    .select('id, title, status, contract_value, end_date, risk_level')
+                    .eq('tenant_id', tenantId)
+                    .order('created_at', { ascending: false })
+
+                console.log("Fetched docs:", data?.length, "for tenant:", tenantId)
+
+                if (!error && data) {
+                    documents = data
+                    totalContracts = data.length
+
+                    data.forEach(doc => {
+                        // Parse contract_value securely
+                        totalPortfolioValue += parseContractValue(doc.contract_value)
+
+                        // Count risk levels
+                        const risk = doc.risk_level?.toLowerCase()
+                        if (risk === 'high') highRiskCount++
+                        else if (risk === 'medium') mediumRiskCount++
+                        else if (risk === 'low') lowRiskCount++
+                    })
+                } else if (error) {
+                    console.error("Error fetching documents:", error.message || JSON.stringify(error))
+                }
+            }
+        } catch (e: any) {
+            console.error("Exception fetching documents:", e.message || JSON.stringify(e))
+        }
     }
+    const formattedPortfolioValue = new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: 0
+    }).format(totalPortfolioValue)
 
     // Getting current date for the header
     const today = new Date().toLocaleDateString('en-US', {
@@ -67,45 +132,46 @@ export default async function DashboardPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div className="bg-surface border border-surface-border p-6 rounded hover:border-primary/30 transition-colors group">
                             <div className="flex justify-between items-start mb-2">
-                                <span className="text-sm font-medium text-text-muted uppercase tracking-wider">Billable MTD</span>
-                                <span className="material-symbols-outlined text-primary">trending_up</span>
+                                <span className="text-sm font-medium text-text-muted uppercase tracking-wider">Total Portfolio Value</span>
+                                <span className="material-symbols-outlined text-primary">account_balance</span>
                             </div>
                             <div className="flex items-baseline gap-2">
-                                <span className="font-display text-4xl text-white font-light">$42,500</span>
-                                <span className="text-sm text-primary font-medium">+12%</span>
+                                <span className="font-display text-4xl text-white font-light">{formattedPortfolioValue}</span>
                             </div>
                             <div className="mt-4 h-1 w-full bg-surface-border rounded-full overflow-hidden">
-                                <div className="h-full bg-primary w-[75%]"></div>
+                                <div className="h-full bg-primary w-[100%]"></div>
                             </div>
                         </div>
                         <div className="bg-surface border border-surface-border p-6 rounded hover:border-primary/30 transition-colors group">
                             <div className="flex justify-between items-start mb-2">
-                                <span className="text-sm font-medium text-text-muted uppercase tracking-wider">Urgent Deadlines</span>
-                                <span className="material-symbols-outlined text-orange-500">warning</span>
+                                <span className="text-sm font-medium text-text-muted uppercase tracking-wider">Active Contracts</span>
+                                <span className="material-symbols-outlined text-emerald-500">description</span>
                             </div>
                             <div className="flex items-baseline gap-2">
-                                <span className="font-display text-4xl text-white font-light">3</span>
-                                <span className="text-sm text-text-muted font-medium">This Week</span>
+                                <span className="font-display text-4xl text-white font-light">{totalContracts}</span>
+                                <span className="text-sm text-text-muted font-medium">Indexed</span>
                             </div>
                             <div className="flex -space-x-2 mt-4">
-                                <div className="w-6 h-6 rounded-full border border-surface bg-neutral-800 text-[10px] flex items-center justify-center text-white" title="Matter A">A</div>
-                                <div className="w-6 h-6 rounded-full border border-surface bg-neutral-800 text-[10px] flex items-center justify-center text-white" title="Matter B">B</div>
-                                <div className="w-6 h-6 rounded-full border border-surface bg-neutral-800 text-[10px] flex items-center justify-center text-white" title="Matter C">C</div>
+                                {documents.slice(0, 3).map((doc, idx) => (
+                                    <div key={idx} className="w-6 h-6 rounded-full border border-surface bg-neutral-800 text-[10px] flex items-center justify-center text-white" title={doc.title}>
+                                        {doc.title?.charAt(0)?.toUpperCase() || '?'}
+                                    </div>
+                                ))}
                             </div>
                         </div>
                         <div className="bg-surface border border-surface-border p-6 rounded hover:border-primary/30 transition-colors group">
                             <div className="flex justify-between items-start mb-2">
-                                <span className="text-sm font-medium text-text-muted uppercase tracking-wider">Pending Signatures</span>
-                                <span className="material-symbols-outlined text-text-muted">draw</span>
+                                <span className="text-sm font-medium text-text-muted uppercase tracking-wider">High Risk Exposure</span>
+                                <span className="material-symbols-outlined text-red-500">warning</span>
                             </div>
                             <div className="flex items-baseline gap-2">
-                                <span className="font-display text-4xl text-white font-light">7</span>
-                                <span className="text-sm text-text-muted font-medium">Docs</span>
+                                <span className="font-display text-4xl text-white font-light">{highRiskCount}</span>
+                                <span className="text-sm text-text-muted font-medium">Contracts</span>
                             </div>
                             <div className="mt-4 flex gap-1">
-                                <div className="h-1 flex-1 bg-primary rounded-full"></div>
-                                <div className="h-1 flex-1 bg-primary rounded-full"></div>
-                                <div className="h-1 flex-1 bg-primary/40 rounded-full"></div>
+                                <div className={`h-1 flex-1 rounded-full ${highRiskCount > 0 ? 'bg-red-500' : 'bg-surface-border'}`}></div>
+                                <div className={`h-1 flex-1 rounded-full ${highRiskCount > 1 ? 'bg-red-500' : 'bg-surface-border'}`}></div>
+                                <div className={`h-1 flex-1 rounded-full ${highRiskCount > 2 ? 'bg-red-500/40' : 'bg-surface-border'}`}></div>
                                 <div className="h-1 flex-1 bg-surface-border rounded-full"></div>
                             </div>
                         </div>
@@ -151,48 +217,39 @@ export default async function DashboardPage() {
                         <div className="bg-surface border border-surface-border p-6 rounded flex flex-col h-[320px]">
                             <div className="flex justify-between items-center mb-6">
                                 <div>
-                                    <h3 className="font-display text-xl text-white">Portfolio Risk Score</h3>
-                                    <p className="text-xs text-text-muted">Real-time clause analysis</p>
+                                    <h3 className="font-display text-xl text-white">Portfolio Risk Distribution</h3>
+                                    <p className="text-xs text-text-muted">Real-time clause analysis aggregation</p>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <span className="w-2 h-2 rounded-full bg-primary"></span>
-                                    <span className="text-xs text-text-muted">High Exposure</span>
+                                    <span className="text-xs text-text-muted">Total: {totalContracts}</span>
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4 h-full">
-                                <div className="bg-surface-border/30 p-4 border border-surface-border/50 rounded flex flex-col justify-between hover:bg-surface-border/50 transition-colors">
-                                    <span className="text-xs text-text-muted uppercase tracking-wider">Indemnity</span>
+                                <div className="bg-surface-border/30 p-4 border border-surface-border/50 rounded flex flex-col justify-between hover:bg-surface-border/50 transition-colors col-span-2">
+                                    <span className="text-xs text-text-muted uppercase tracking-wider">High Risk</span>
                                     <div className="flex items-end justify-between">
-                                        <span className="text-lg font-display text-white">High</span>
-                                        <div className="w-12 h-1 bg-surface-border rounded-full overflow-hidden">
-                                            <div className="h-full bg-red-500 w-[80%]"></div>
+                                        <span className="text-2xl font-display text-white">{highRiskCount}</span>
+                                        <div className="w-32 h-2 bg-surface-border rounded-full overflow-hidden">
+                                            <div className="h-full bg-red-500 transition-all duration-1000" style={{ width: `${totalContracts > 0 ? (highRiskCount / totalContracts) * 100 : 0}%` }}></div>
                                         </div>
                                     </div>
                                 </div>
                                 <div className="bg-surface-border/30 p-4 border border-surface-border/50 rounded flex flex-col justify-between hover:bg-surface-border/50 transition-colors">
-                                    <span className="text-xs text-text-muted uppercase tracking-wider">Liability Cap</span>
-                                    <div className="flex items-end justify-between">
-                                        <span className="text-lg font-display text-white">Med</span>
-                                        <div className="w-12 h-1 bg-surface-border rounded-full overflow-hidden">
-                                            <div className="h-full bg-primary w-[50%]"></div>
+                                    <span className="text-xs text-text-muted uppercase tracking-wider">Medium Risk</span>
+                                    <div className="flex items-end justify-between mt-2">
+                                        <span className="text-xl font-display text-white">{mediumRiskCount}</span>
+                                        <div className="w-16 h-1 bg-surface-border rounded-full overflow-hidden">
+                                            <div className="h-full bg-amber-500 transition-all duration-1000" style={{ width: `${totalContracts > 0 ? (mediumRiskCount / totalContracts) * 100 : 0}%` }}></div>
                                         </div>
                                     </div>
                                 </div>
                                 <div className="bg-surface-border/30 p-4 border border-surface-border/50 rounded flex flex-col justify-between hover:bg-surface-border/50 transition-colors">
-                                    <span className="text-xs text-text-muted uppercase tracking-wider">Jurisdiction</span>
-                                    <div className="flex items-end justify-between">
-                                        <span className="text-lg font-display text-white">Low</span>
-                                        <div className="w-12 h-1 bg-surface-border rounded-full overflow-hidden">
-                                            <div className="h-full bg-green-500 w-[20%]"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="bg-surface-border/30 p-4 border border-surface-border/50 rounded flex flex-col justify-between hover:bg-surface-border/50 transition-colors">
-                                    <span className="text-xs text-text-muted uppercase tracking-wider">Termination</span>
-                                    <div className="flex items-end justify-between">
-                                        <span className="text-lg font-display text-white">Med</span>
-                                        <div className="w-12 h-1 bg-surface-border rounded-full overflow-hidden">
-                                            <div className="h-full bg-primary w-[60%]"></div>
+                                    <span className="text-xs text-text-muted uppercase tracking-wider">Low Risk</span>
+                                    <div className="flex items-end justify-between mt-2">
+                                        <span className="text-xl font-display text-white">{lowRiskCount}</span>
+                                        <div className="w-16 h-1 bg-surface-border rounded-full overflow-hidden">
+                                            <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${totalContracts > 0 ? (lowRiskCount / totalContracts) * 100 : 0}%` }}></div>
                                         </div>
                                     </div>
                                 </div>
@@ -200,60 +257,8 @@ export default async function DashboardPage() {
                         </div>
                     </div>
 
-                    {/* Recent Activity */}
-                    <div className="bg-surface border border-surface-border rounded overflow-hidden">
-                        <div className="px-6 py-4 border-b border-surface-border flex justify-between items-center">
-                            <h3 className="font-display text-xl text-white">Recent Activity</h3>
-                            <button className="text-sm text-primary hover:text-white transition-colors">View All History</button>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left">
-                                <thead className="bg-surface-border/20 text-text-muted text-xs uppercase tracking-wider">
-                                    <tr>
-                                        <th className="px-6 py-3 font-medium">Time</th>
-                                        <th className="px-6 py-3 font-medium">User</th>
-                                        <th className="px-6 py-3 font-medium">Action</th>
-                                        <th className="px-6 py-3 font-medium text-right">Context</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-surface-border text-sm">
-                                    <tr className="hover:bg-white/5 transition-colors">
-                                        <td className="px-6 py-4 text-text-muted whitespace-nowrap font-mono">10:42 AM</td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] text-primary">JD</div>
-                                                <span className="text-white">J. Doe</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-white">Edited NDA v4.2 - Adjusted Indemnity Clause</td>
-                                        <td className="px-6 py-4 text-right"><span className="bg-surface-border px-2 py-1 rounded text-xs text-text-muted">Corporate</span></td>
-                                    </tr>
-                                    <tr className="hover:bg-white/5 transition-colors">
-                                        <td className="px-6 py-4 text-text-muted whitespace-nowrap font-mono">09:15 AM</td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-[10px] text-blue-400">AI</div>
-                                                <span className="text-white">Clause AI</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-white">Risk Analysis Complete - High Exposure Detected</td>
-                                        <td className="px-6 py-4 text-right"><span className="bg-surface-border px-2 py-1 rounded text-xs text-text-muted">Mergers</span></td>
-                                    </tr>
-                                    <tr className="hover:bg-white/5 transition-colors">
-                                        <td className="px-6 py-4 text-text-muted whitespace-nowrap font-mono">08:30 AM</td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] text-primary">AS</div>
-                                                <span className="text-white">A. Sterling</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-white">Approved Final Settlement Terms</td>
-                                        <td className="px-6 py-4 text-right"><span className="bg-surface-border px-2 py-1 rounded text-xs text-text-muted">Litigation</span></td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+                    {/* Intelligent Document List */}
+                    <DocumentList documents={documents} />
                 </div>
             </div>
         </>

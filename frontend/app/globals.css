@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 @theme {
   --color-primary: #c59f59;
@@ -7,7 +8,8 @@
   --color-surface-border: #27272A;
   --color-text-muted: #a1a1aa;
 
-  --font-display: "Newsreader", serif;
+  --font-display: "Playfair Display", serif;
+  --font-mono: "JetBrains Mono", monospace;
   --font-sans: "Inter", sans-serif;
 }
 

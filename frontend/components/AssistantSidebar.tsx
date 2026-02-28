@@ -2,12 +2,15 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { chatWithClause } from '@/app/actions/backend'
+import { Sparkles, Command, User, Send, FileText } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Message {
     id: string
     role: 'user' | 'assistant'
     content: string
-    citations?: { contract_id: string }[]
+    citations?: { contract_id: string; file_name?: string }[]
 }
 
 export default function AssistantSidebar() {
@@ -59,10 +62,10 @@ export default function AssistantSidebar() {
     }
 
     return (
-        <aside className="w-80 border-l border-surface-border bg-surface hidden xl:flex flex-col shrink-0">
-            <div className="h-16 flex items-center px-6 border-b border-surface-border bg-surface">
+        <aside className="flex flex-col w-full h-full overflow-hidden bg-background-dark border-l border-white/10">
+            <div className="h-16 flex items-center px-6 border-b border-surface-border bg-surface shrink-0">
                 <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-primary">smart_toy</span>
+                    <Sparkles className="w-5 h-5 text-primary" />
                     <h2 className="font-display text-lg text-white">Clause Assistant</h2>
                 </div>
             </div>
@@ -72,11 +75,11 @@ export default function AssistantSidebar() {
                     <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
                         {msg.role === 'assistant' ? (
                             <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center shrink-0 mt-1">
-                                <span className="material-symbols-outlined text-primary text-sm">auto_awesome</span>
+                                <Command className="w-4 h-4 text-primary" />
                             </div>
                         ) : (
                             <div className="w-8 h-8 rounded bg-white/10 flex items-center justify-center shrink-0 mt-1">
-                                <span className="text-xs text-white">ME</span>
+                                <User className="w-4 h-4 text-white" />
                             </div>
                         )}
                         <div className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : ''} max-w-[85%]`}>
@@ -84,21 +87,36 @@ export default function AssistantSidebar() {
                                 {msg.role === 'assistant' ? 'Assistant' : 'You'}
                             </span>
                             <div className={`p-3 text-sm leading-relaxed ${msg.role === 'assistant'
-                                    ? 'bg-surface-border/30 rounded-lg rounded-tl-none border border-surface-border text-gray-300'
-                                    : 'bg-white/5 rounded-lg rounded-tr-none border border-surface-border text-white'
+                                ? 'bg-surface-border/30 rounded-lg rounded-tl-none border border-surface-border'
+                                : 'bg-white/5 rounded-lg rounded-tr-none border border-surface-border text-white'
                                 }`}>
-                                {msg.content}
+                                {msg.role === 'assistant' ? (
+                                    <div className="prose prose-invert prose-sm max-w-none text-gray-300 [&>p]:mb-2 last:[&>p]:mb-0 [&>ul]:mt-1 [&>ul]:mb-2 [&>li]:my-0.5">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                            {msg.content}
+                                        </ReactMarkdown>
+                                    </div>
+                                ) : (
+                                    msg.content
+                                )}
                             </div>
 
                             {/* Evidence Chips */}
                             {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
                                 <div className="flex flex-wrap gap-2 mt-1">
-                                    {msg.citations.map((cite, idx) => (
-                                        <button key={idx} className="flex items-center gap-1 bg-surface-border/60 hover:bg-primary/20 border border-surface-border text-[10px] text-text-muted hover:text-primary px-2 py-1 rounded-full transition-colors" title={`Contract ID: ${cite.contract_id}`}>
-                                            <span className="material-symbols-outlined text-[12px]">description</span>
-                                            Source: Document
-                                        </button>
-                                    ))}
+                                    {msg.citations.map((cite, idx) => {
+                                        return (
+                                            <button
+                                                key={idx}
+                                                onClick={() => console.log('View Source:', cite.contract_id)}
+                                                className="flex items-center gap-1.5 bg-surface-border/60 hover:bg-primary/20 border border-surface-border text-[10px] text-text-muted hover:text-primary px-2 py-1 rounded-full transition-colors cursor-pointer"
+                                                title={`Contract ID: ${cite.contract_id}`}
+                                            >
+                                                <FileText className="w-3 h-3" />
+                                                Source: {cite.file_name || 'Document'}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
@@ -108,7 +126,7 @@ export default function AssistantSidebar() {
                 {isLoading && (
                     <div className="flex gap-3">
                         <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center shrink-0 mt-1">
-                            <span className="material-symbols-outlined text-primary text-sm">auto_awesome</span>
+                            <Command className="w-4 h-4 text-primary" />
                         </div>
                         <div className="flex flex-col gap-1">
                             <span className="text-[10px] uppercase font-medium text-primary tracking-wider">Assistant</span>
@@ -139,9 +157,9 @@ export default function AssistantSidebar() {
                     <button
                         onClick={handleSend}
                         disabled={isLoading || !input.trim()}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-primary hover:text-white transition-colors p-1 disabled:opacity-30 disabled:hover:text-primary cursor-pointer"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-primary hover:text-white transition-colors p-1 disabled:opacity-30 disabled:hover:text-primary cursor-pointer flex items-center justify-center"
                     >
-                        <span className="material-symbols-outlined text-xl">send</span>
+                        <Send className="w-5 h-5" />
                     </button>
                 </div>
                 <p className="text-[10px] text-center text-text-muted mt-2 opacity-50">AI generated insights based on your secured RAG data.</p>

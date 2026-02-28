@@ -1,9 +1,12 @@
 import os
 import io
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
+from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client import models
 from openai import OpenAI
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
@@ -14,8 +17,18 @@ load_dotenv()
 
 app = FastAPI(title="CLAUSE Intelligent Engine", version="1.1.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- INISIALISASI ---
-supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
+# Use Service Role Key if available to bypass RLS for backend data fetching
+supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+supabase: Client = create_client(os.getenv("SUPABASE_URL"), supabase_key)
 qdrant = QdrantClient(url=os.getenv("QDRANT_URL", "http://qdrant:6333"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 COLLECTION_NAME = "contracts_vectors"
@@ -29,14 +42,49 @@ if COLLECTION_NAME not in collection_names:
         vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
     )
 
+class MatterCreate(BaseModel):
+    name: str
+    description: str
+    tenant_id: str
+
+@app.post("/api/matters")
+async def create_matter(matter: MatterCreate):
+    try:
+        matter_id = str(uuid.uuid4())
+        response = supabase.table("matters").insert({
+            "id": matter_id,
+            "tenant_id": matter.tenant_id,
+            "name": matter.name,
+            "description": matter.description
+        }).execute()
+        return {"status": "success", "data": response.data}
+    except Exception as e:
+        print(f"API Create Matter Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/matters")
+async def get_matters(tenant_id: str):
+    try:
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id is required")
+        response = supabase.table("matters").select("*").eq("tenant_id", tenant_id).execute()
+        return {"status": "success", "data": response.data}
+    except Exception as e:
+        print(f"API Get Matters Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # =====================================================================
 # 1. STEP 3: SECURITY HARDENING (MAGIC NUMBERS VALIDATION)
 # =====================================================================
 @app.post("/api/upload")
 async def upload_contract(
     file: UploadFile = File(...),
-    tenant_id: str = Form(...)
+    tenant_id: str = Form(...),
+    matter_id: str = Form(None)
 ):
+    if not matter_id:
+        raise HTTPException(status_code=400, detail="matter_id is required.")
+
     # Validasi 1: Ekstensi Kasar
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Hanya menerima file berformat PDF.")
@@ -81,10 +129,13 @@ async def upload_contract(
         supabase.table("contracts").insert({
             "id": contract_id, 
             "tenant_id": tenant_id, 
+            "matter_id": matter_id,
             "title": file.filename,
             "contract_value": final_state.get("contract_value", "Unknown"),
             "end_date": final_state.get("end_date", "Unknown"),
-            "risk_level": risk_level
+            "risk_level": risk_level,
+            "counter_proposal": final_state.get("counter_proposal"),
+            "draft_revisions": final_state.get("draft_revisions")
         }).execute()
         
         # Existing Vector Embedding
@@ -122,7 +173,8 @@ async def chat_with_clause(
         search_results = qdrant.search(
             collection_name=COLLECTION_NAME,
             query_vector=question_vector,
-            limit=3,
+            limit=20, # Increased limit to bypass ghost vector pollution
+
             # INI ADALAH KUNCI UTAMA KEAMANAN RAG MULTI-TENANT:
             query_filter=Filter(
                 must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
@@ -132,17 +184,76 @@ async def chat_with_clause(
         if not search_results:
             return {"answer": "Maaf, saya tidak menemukan dokumen yang relevan di brankas perusahaan Anda untuk menjawab ini.", "citations": []}
 
-        # 3. Kumpulkan Bukti (Context Injection)
+        # 3. Handle Ghost Data and Fetch Context Enrichment
+        contract_ids = list(set([str(hit.payload.get('contract_id')) for hit in search_results if hit.payload.get('contract_id')]))
+        
+        valid_contracts = {}
+        if contract_ids:
+            try:
+                print(f"Current Tenant ID in chat: {tenant_id}")
+                # Query contracts table to ensure they still exist (Fixes Ghost Data)
+                # and extract risk_level and metadata (Context Enrichment)
+                supabase_response = supabase.table("contracts").select("*").in_("id", contract_ids).execute()
+                for record in supabase_response.data:
+                    valid_contracts[str(record['id'])] = record
+            except Exception as e:
+                print(f"Error fetching contract metadata: {e}")
+
+        print(f"Qdrant Contract IDs: {contract_ids}")
+        print(f"Supabase Valid Contracts: {list(valid_contracts.keys())}")
+
+        # 4. Kumpulkan Bukti (Context Injection) & Clean Ghost Data
         context = ""
         citations = []
         for hit in search_results:
-            context += f"Sumber Dokumen: {hit.payload.get('text', '')}\n---\n"
-            citations.append({"contract_id": hit.payload.get('contract_id')})
+            contract_id = str(hit.payload.get('contract_id'))
+            
+            # If contract is not in Supabase, it's Ghost Data (deleted), so we PERMANENTLY delete it from Qdrant.
+            if contract_id not in valid_contracts:
+                try:
+                    qdrant.delete(
+                        collection_name=COLLECTION_NAME, 
+                        wait=False, 
+                        points_selector=models.Filter(must=[models.FieldCondition(key="contract_id", match=models.MatchValue(value=contract_id))])
+                    )
+                    print(f"Permanently deleted Ghost Contract ID from Qdrant: {contract_id}")
+                except Exception as e:
+                    print(f"Error deleting ghost vector: {e}")
+                continue
 
-        # 4. Prompt Engineering untuk LLM
-        system_prompt = f"""Anda adalah CLAUSE, asisten hukum AI senior. Jawab pertanyaan hanya berdasarkan konteks dokumen berikut. 
-        Jika jawabannya tidak ada di dokumen, katakan 'Data tidak ditemukan'. Jangan berhalusinasi.
-        
+            contract_meta = valid_contracts[contract_id]
+            risk_level = contract_meta.get('risk_level', 'Unknown')
+            # Extract smart_metadata (e.g. LangGraph risk assessment/compliance issues)
+            # Safely fallback to 'metadata' or 'smart_metadata'
+            smart_meta = contract_meta.get('smart_metadata', contract_meta.get('metadata', 'None'))
+            file_title = contract_meta.get('title', contract_meta.get('file_name', 'Unknown Document'))
+
+            context += "Sumber Dokumen:\n"
+            context += f"Judul Dokumen: {file_title}\n"
+            context += f"Raw Text: {hit.payload.get('text', '')}\n"
+            context += f"LangGraph Risk Assessment untuk dokumen ini: Risk Level: {risk_level}, Metadata: {smart_meta}\n---\n"
+            
+            # Avoid duplicate citations for the same document
+            if not any(cite['contract_id'] == contract_id for cite in citations):
+                citations.append({
+                    "contract_id": contract_id, 
+                    "file_name": file_title
+                })
+
+        if not citations:
+            return {"answer": "Maaf, seluruh dokumen relevan yang ditemukan sudah dihapus dari sistem (Ghost Data) atau fitur pencarian gagal.", "citations": []}
+
+        # 5. Prompt Engineering untuk LLM
+        system_prompt = f"""Anda adalah CLAUSE, Manajer Portofolio Hukum AI (AI Legal Portfolio Manager) tingkat Enterprise yang sangat profesional, sopan, dan analitis.
+        Tugas Anda adalah merangkum, mengevaluasi, dan membandingkan informasi dari KESELURUHAN DOKUMEN yang diberikan di konteks.
+        Jawablah pertanyaan secara general dan komprehensif. Jangan hanya terfokus pada satu dokumen jika terdapat beberapa dokumen relevan.
+
+        PANDUAN MENJAWAB:
+        1. Jika pengguna bertanya tentang "risiko", "bahaya", atau "kepatuhan" secara umum di portofolio mereka, SELALU identifikasi dan urutkan berdasarkan 'Risk Level' dan 'Metadata' dari dokumen-dokumen yang terlampir. Uraikan dokumen mana yang berisiko tinggi dan mana yang aman.
+        2. Jika seluruh dokumen berisiko rendah atau tidak ada klausa berbahaya, JANGAN menjawab "Data tidak ditemukan". Berikan ringkasan manajerial yang profesional, contoh: "Berdasarkan analisis portofolio, dokumen-dokumen Anda saat ini diklasifikasikan sebagai [Risk Level]. Tidak terdapat klausa agregat yang membahayakan, namun perhatikan catatan kepatuhan berikut pada masing-masing kontrak: [Ringkasan Metadata]."
+        3. Jika informasi yang ditanyakan benar-benar tidak tertuang dalam teks maupun metadata portofolio, jawab dengan sopan: "Maaf, usai menelusuri portofolio Anda, informasi spesifik mengenai hal tersebut tidak tertuang di dalam dokumen yang dianalisis."
+        4. Gunakan bahasa Indonesia yang baku, terstruktur, elegan, dan berorientasi pada eksekutif pengambil keputusan.
+
         KONTEKS DOKUMEN:
         {context}"""
 

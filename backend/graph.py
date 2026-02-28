@@ -27,6 +27,8 @@ class ContractState(TypedDict):
     compliance_issues: List[str]  # List of legal/compliance violations found
     risk_flags: List[str]         # Specific risk warnings
     risk_score: float             # Calculated risk score (0-100)
+    counter_proposal: str         # Negotiation strategy / BATNA reasoning
+    draft_revisions: List[Any]    # Revised neutral/fair clauses
 
 # ==========================================
 # 2. Agent 01: Ingestion Agent
@@ -155,7 +157,89 @@ def risk_agent(state: ContractState) -> ContractState:
         return {"risk_score": 100.0, "risk_flags": ["Error calculating risk."]}
 
 # ==========================================
-# 5. Graph Orchestration
+# 5. Agent 04: Negotiation Strategy Agent
+# ==========================================
+def negotiation_agent(state: ContractState) -> ContractState:
+    """
+    AGENT 04: Analyzes compliance issues and risk flags to formulate a negotiation strategy based on BATNA.
+    Returns: counter_proposal (string).
+    """
+    print("[Agent 04: Negotiation] Formulating BATNA-based negotiation strategy...")
+    
+    issues = state.get('compliance_issues', [])
+    flags = state.get('risk_flags', [])
+    
+    prompt = f"""
+    You are an expert Corporate Negotiation Strategist.
+    Analyze the following compliance issues and risk flags and formulate a BATNA-based (Best Alternative to a Negotiated Agreement) strategy on how to negotiate these points with the counterparty.
+    Provide a robust, professional counter_proposal strategy.
+    
+    Return pure JSON with a single key 'counter_proposal' mapping to a detailed string containing the strategy.
+    
+    COMPLIANCE ISSUES:
+    {json.dumps(issues)}
+    RISK FLAGS:
+    {json.dumps(flags)}
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": "You are a strategic negotiation JSON generator."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    try:
+        result = json.loads(response.choices[0].message.content)
+        return {"counter_proposal": result.get("counter_proposal", "No strategy formulated.")}
+    except Exception as e:
+        print(f"Negotiation Agent Error: {e}")
+        return {"counter_proposal": "Error formulating negotiation strategy."}
+
+# ==========================================
+# 6. Agent 05: Contract Drafting Agent
+# ==========================================
+def drafting_agent(state: ContractState) -> ContractState:
+    """
+    AGENT 05: Based on the negotiation strategy, rewrites risky clauses into Fair/Neutral versions.
+    Returns: draft_revisions (list of dicts).
+    """
+    print("[Agent 05: Drafting] Rewriting risky clauses to neutral/fair versions...")
+    
+    strategy = state.get('counter_proposal', '')
+    issues = state.get('compliance_issues', [])
+    
+    prompt = f"""
+    You are a Senior Contract Drafter.
+    Based on the following negotiation strategy and compliance issues, rewrite the problematic clauses into "Fair/Neutral" B2B versions.
+    
+    Return pure JSON with a single key 'draft_revisions' mapping to a list of dicts. Each dict should have 'original_issue' (string) and 'neutral_rewrite' (string).
+    
+    NEGOTIATION STRATEGY: {strategy}
+    COMPLIANCE ISSUES:
+    {json.dumps(issues)}
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": "You are a legal contract drafting JSON generator."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    try:
+        result = json.loads(response.choices[0].message.content)
+        return {"draft_revisions": result.get("draft_revisions", [])}
+    except Exception as e:
+        print(f"Drafting Agent Error: {e}")
+        return {"draft_revisions": [{"error": "Failed to draft revisions."}]}
+
+# ==========================================
+# 7. Graph Orchestration
 # ==========================================
 # Initialize the StateGraph with our ContractState
 workflow = StateGraph(ContractState)
@@ -164,12 +248,16 @@ workflow = StateGraph(ContractState)
 workflow.add_node("ingestion", ingestion_agent)
 workflow.add_node("compliance", compliance_agent)
 workflow.add_node("risk", risk_agent)
+workflow.add_node("negotiation", negotiation_agent)
+workflow.add_node("drafting", drafting_agent)
 
 # Define the sequential execution flow
 workflow.set_entry_point("ingestion")
 workflow.add_edge("ingestion", "compliance")
 workflow.add_edge("compliance", "risk")
-workflow.add_edge("risk", END)
+workflow.add_edge("risk", "negotiation")
+workflow.add_edge("negotiation", "drafting")
+workflow.add_edge("drafting", END)
 
 # Compile the graph into an executable application
 clm_graph = workflow.compile()

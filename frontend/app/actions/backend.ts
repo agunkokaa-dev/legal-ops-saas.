@@ -1,6 +1,7 @@
 'use server'
 
 import { auth } from '@clerk/nextjs/server'
+import { revalidatePath } from 'next/cache'
 
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000'
 
@@ -65,6 +66,7 @@ export async function uploadDocument(formData: FormData) {
         }
 
         const data = await response.json()
+        revalidatePath('/dashboard')
         return { success: true, data }
     } catch (error: any) {
         console.error("Upload Action Error:", error)
