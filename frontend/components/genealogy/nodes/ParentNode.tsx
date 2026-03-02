@@ -1,10 +1,16 @@
 'use client'
 
 import { Handle, Position } from '@xyflow/react'
+import { useRouter } from 'next/navigation'
 
 export default function ParentNode({ data }: { data: any }) {
+    const router = useRouter()
+
     return (
-        <div className="bg-lux-card border border-lux-border rounded-lg p-5 w-80 shadow-[0_10px_30px_rgba(0,0,0,0.8)] relative">
+        <div
+            onClick={() => router.push(`/dashboard/contracts/${data.id}`)}
+            className="bg-lux-card border border-lux-border rounded-lg p-5 w-80 shadow-[0_10px_30px_rgba(0,0,0,0.8)] relative cursor-pointer hover:ring-1 hover:ring-lux-gold transition-all"
+        >
             <div className="flex justify-between items-start mb-4">
                 <div>
                     <span className="bg-lux-gold/10 text-lux-gold text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider mb-2 inline-block">

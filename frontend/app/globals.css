@@ -3,7 +3,7 @@
 
 @theme {
   --color-primary: #c59f59;
-  --color-background-dark: #050505;
+  --color-background: #050505;
   --color-surface: #09090b;
   --color-surface-border: #27272A;
   --color-text-muted: #a1a1aa;
@@ -48,6 +48,6 @@
 
 @layer base {
   body {
-    @apply bg-background-dark text-white font-sans;
+    @apply bg-background text-white font-sans;
   }
 }

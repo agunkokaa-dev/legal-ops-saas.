@@ -215,3 +215,25 @@ export async function getGraphData(matterId: string) {
         return { documents: [], relationships: [] }
     }
 }
+
+// 6. Get Contract By ID
+export async function getContractById(contractId: string) {
+    const { userId, orgId } = await auth()
+    if (!userId) return { error: "Unauthorized" }
+
+    const tenantId = orgId || userId
+
+    try {
+        const { data, error } = await supabaseAdmin
+            .from('contracts')
+            .select('*')
+            .eq('id', contractId)
+            .eq('tenant_id', tenantId)
+            .single()
+
+        if (error) throw error
+        return { data }
+    } catch (e: any) {
+        return { error: e.message || "Failed to fetch contract." }
+    }
+}

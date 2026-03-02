@@ -4,6 +4,7 @@ import Sidebar from '@/components/Sidebar'
 import AssistantSidebar from '@/components/AssistantSidebar'
 import { ChevronLeft, ChevronRight, GripVertical } from 'lucide-react'
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 
 export default function DashboardLayout({
     children,
@@ -14,6 +15,9 @@ export default function DashboardLayout({
     const [sidebarWidth, setSidebarWidth] = useState(350); // Default width 350px
     const [isDragging, setIsDragging] = useState(false);
     const dragRef = useRef(false);
+    const pathname = usePathname();
+
+    const isContractDetailPage = pathname?.startsWith('/dashboard/contracts/');
 
     const handleMouseDown = (e: React.MouseEvent) => {
         e.preventDefault();
@@ -56,7 +60,7 @@ export default function DashboardLayout({
     };
 
     return (
-        <div className="bg-background-dark text-white h-screen w-screen flex overflow-hidden">
+        <div className="bg-background text-white h-screen w-screen flex overflow-hidden">
             <Sidebar />
 
             {/* Main Dashboard Panel */}
@@ -68,10 +72,10 @@ export default function DashboardLayout({
             </div>
 
             {/* Native Resizer Handle */}
-            {!isCollapsed && (
+            {!isContractDetailPage && !isCollapsed && (
                 <div
                     onMouseDown={handleMouseDown}
-                    className="w-2 bg-background-dark hover:bg-surface-border cursor-col-resize z-50 flex flex-col justify-center items-center relative group"
+                    className="w-2 bg-background hover:bg-surface-border cursor-col-resize z-50 flex flex-col justify-center items-center relative group"
                 >
                     <div className="h-10 w-1 flex items-center justify-center rounded-sm bg-surface-border group-hover:bg-primary/50 transition-colors">
                         <GripVertical className="w-4 h-5 text-text-muted group-hover:text-white" />
@@ -80,24 +84,28 @@ export default function DashboardLayout({
             )}
 
             {/* Assistant Panel */}
-            <div
-                style={{ width: isCollapsed ? '0px' : `${sidebarWidth}px` }}
-                className={`flex flex-col h-full overflow-hidden border-l border-white/10 shrink-0 ${!isDragging ? 'transition-all duration-300 ease-in-out' : ''}`}
-            >
-                {/* Inner wrapper prevents content crush during collapse */}
-                <div className="w-full h-full min-w-[250px]">
-                    <AssistantSidebar />
+            {!isContractDetailPage && (
+                <div
+                    style={{ width: isCollapsed ? '0px' : `${sidebarWidth}px` }}
+                    className={`flex flex-col h-full overflow-hidden border-l border-white/10 shrink-0 ${!isDragging ? 'transition-all duration-300 ease-in-out' : ''}`}
+                >
+                    {/* Inner wrapper prevents content crush during collapse */}
+                    <div className="w-full h-full min-w-[250px]">
+                        <AssistantSidebar />
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* Programmatic Toggle Button Overlay */}
-            <button
-                onClick={togglePanel}
-                className={`absolute top-1/2 -translate-y-1/2 z-[60] flex items-center justify-center w-6 h-8 bg-surface-border hover:bg-primary/80 text-text-muted hover:text-white rounded-l shadow-lg border border-surface-border transition-all duration-300 ${isCollapsed ? 'right-0' : ''}`}
-                style={{ right: isCollapsed ? '0px' : `${sidebarWidth}px` }}
-            >
-                {isCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-            </button>
+            {!isContractDetailPage && (
+                <button
+                    onClick={togglePanel}
+                    className={`absolute top-1/2 -translate-y-1/2 z-[60] flex items-center justify-center w-6 h-8 bg-surface-border hover:bg-primary/80 text-text-muted hover:text-white rounded-l shadow-lg border border-surface-border transition-all duration-300 ${isCollapsed ? 'right-0' : ''}`}
+                    style={{ right: isCollapsed ? '0px' : `${sidebarWidth}px` }}
+                >
+                    {isCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                </button>
+            )}
         </div>
     )
 }

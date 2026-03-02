@@ -1,6 +1,7 @@
 import { getMatterDocuments } from '@/app/actions/documentActions'
 import UploadDocModal from './UploadDocModal'
 import DeleteDocButton from './DeleteDocButton'
+import Link from 'next/link'
 
 function formatBytes(bytes: number, decimals = 2) {
     if (!+bytes) return '0 Bytes'
@@ -60,15 +61,13 @@ export default async function DocumentsTab({ matterId }: { matterId: string }) {
                                             <span className="material-symbols-outlined text-primary text-[20px]">
                                                 description
                                             </span>
-                                            <a
-                                                href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/matter-files/${doc.file_url}`}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="font-medium text-white hover:text-primary transition-colors hover:underline"
+                                            <Link
+                                                href={`/dashboard/contracts/${doc.id}`}
+                                                className="font-medium text-white hover:text-lux-gold transition-colors hover:underline cursor-pointer"
                                                 title={doc.title}
                                             >
                                                 {doc.title.length > 40 ? doc.title.substring(0, 40) + '...' : doc.title}
-                                            </a>
+                                            </Link>
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
@@ -78,9 +77,9 @@ export default async function DocumentsTab({ matterId }: { matterId: string }) {
                                     </td>
                                     <td className="px-6 py-4">
                                         <span className={`font-medium ${doc.risk_level === 'High' ? 'text-red-400' :
-                                                doc.risk_level === 'Medium' ? 'text-yellow-400' :
-                                                    doc.risk_level === 'Low' ? 'text-green-400' :
-                                                        'text-text-muted'
+                                            doc.risk_level === 'Medium' ? 'text-yellow-400' :
+                                                doc.risk_level === 'Low' ? 'text-green-400' :
+                                                    'text-text-muted'
                                             }`}>
                                             {doc.risk_level || 'Pending'}
                                         </span>

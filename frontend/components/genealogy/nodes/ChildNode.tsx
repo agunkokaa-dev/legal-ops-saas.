@@ -1,15 +1,20 @@
 'use client'
 
 import { Handle, Position } from '@xyflow/react'
+import { useRouter } from 'next/navigation'
 
 export default function ChildNode({ data }: { data: any }) {
+    const router = useRouter()
+
     const isCompleted = data.status === 'completed'
     const isActive = data.status === 'active'
     const isPending = data.status === 'pending'
 
     return (
-        <div className={`
-            bg-lux-sidebar rounded-lg p-4 w-64 shadow-xl transition-all duration-300
+        <div
+            onClick={() => router.push(`/dashboard/contracts/${data.id}`)}
+            className={`
+            bg-lux-sidebar rounded-lg p-4 w-64 shadow-xl transition-all duration-300 cursor-pointer hover:ring-1 hover:ring-lux-gold
             ${isActive ? 'border border-lux-amber/50 shadow-[0_0_20px_rgba(251,191,36,0.1)]' : ''}
             ${isPending ? 'border border-dashed border-lux-text-muted/50 opacity-70' : ''}
             ${isCompleted ? 'border border-lux-border opacity-60' : ''}
