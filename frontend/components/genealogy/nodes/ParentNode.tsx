@@ -8,8 +8,9 @@ export default function ParentNode({ data }: { data: any }) {
 
     return (
         <div
-            onClick={() => router.push(`/dashboard/contracts/${data.id}`)}
-            className="bg-lux-card border border-lux-border rounded-lg p-5 w-80 shadow-[0_10px_30px_rgba(0,0,0,0.8)] relative cursor-pointer hover:ring-1 hover:ring-lux-gold transition-all"
+            onClick={() => data.id && router.push(`/dashboard/contracts/${data.id}`)}
+            className={`bg-lux-card border rounded-lg p-5 w-80 shadow-[0_10px_30px_rgba(0,0,0,0.8)] relative cursor-pointer transition-all
+                ${data.isCurrent ? 'border-lux-gold ring-2 ring-lux-gold/50 shadow-[0_0_20px_rgba(212,175,55,0.4)]' : 'border-lux-border hover:ring-1 hover:ring-lux-gold'}`}
         >
             <div className="flex justify-between items-start mb-4">
                 <div>

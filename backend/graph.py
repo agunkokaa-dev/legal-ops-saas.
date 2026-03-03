@@ -24,6 +24,9 @@ class ContractState(TypedDict):
     extracted_clauses: Dict[str, Any] # Structured dictionary of key clauses
     contract_value: str           # Financial value or consideration found
     end_date: str                 # Termination or expiry date
+    effective_date: str           # Date the agreement goes into effect
+    jurisdiction: str             # Legal jurisdiction
+    governing_law: str            # Governing law
     compliance_issues: List[str]  # List of legal/compliance violations found
     risk_flags: List[str]         # Specific risk warnings
     risk_score: float             # Calculated risk score (0-100)
@@ -47,9 +50,12 @@ def ingestion_agent(state: ContractState) -> ContractState:
     Extract the following from the provided contract text:
     1. 'contract_value': The total financial consideration or value. If none, say "Not Specified".
     2. 'end_date': The termination date or duration. If none, say "Not Specified".
-    3. 'extracted_clauses': A dictionary where keys are clause names (e.g., 'Indemnity', 'Liability', 'Termination') and values are the exact text or a summary.
+    3. 'effective_date': The date the agreement goes into effect. Look for phrases like 'Effective Date', 'Tanggal Efektif', or use the date the agreement is signed. If none, return null.
+    4. 'jurisdiction': The legal jurisdiction of the contract. If none, return null.
+    5. 'governing_law': The governing law of the contract. If none, return null.
+    6. 'extracted_clauses': A dictionary where keys are clause names (e.g., 'Indemnity', 'Liability', 'Termination') and values are the exact text or a summary.
     
-    Return pure JSON with keys: 'contract_value', 'end_date', 'extracted_clauses'.
+    Return pure JSON with keys: 'contract_value', 'end_date', 'effective_date', 'jurisdiction', 'governing_law', 'extracted_clauses'.
     
     CONTRACT TEXT:
     {state.get('raw_document', '')[:10000]} # Truncated for safety
@@ -69,11 +75,14 @@ def ingestion_agent(state: ContractState) -> ContractState:
         return {
             "contract_value": result.get("contract_value", "Unknown"),
             "end_date": result.get("end_date", "Unknown"),
+            "effective_date": result.get("effective_date", None),
+            "jurisdiction": result.get("jurisdiction", None),
+            "governing_law": result.get("governing_law", None),
             "extracted_clauses": result.get("extracted_clauses", {})
         }
     except Exception as e:
         print(f"Ingestion Agent Error: {e}")
-        return {"contract_value": "Error", "end_date": "Error", "extracted_clauses": {}}
+        return {"contract_value": "Error", "end_date": "Error", "effective_date": None, "jurisdiction": None, "governing_law": None, "extracted_clauses": {}}
 
 # ==========================================
 # 3. Agent 02: Compliance Agent

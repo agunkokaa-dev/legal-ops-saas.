@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
     PdfLoader,
     PdfHighlighter,
@@ -20,10 +20,13 @@ const WORKER_URL = 'https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.mj
 interface PDFHighlighterComponentProps {
     fileUrl: string
     contractId: string
+    scrollToId?: string | null
+    notes?: any[]
 }
 
-export default function PDFHighlighterComponent({ fileUrl, contractId }: PDFHighlighterComponentProps) {
+export default function PDFHighlighterComponent({ fileUrl, contractId, scrollToId, notes }: PDFHighlighterComponentProps) {
     const router = useRouter()
+    const scrollToFnRef = useRef<((highlight: any) => void) | null>(null)
 
     const [isMounted, setIsMounted] = useState(false)
     const [highlights, setHighlights] = useState<any[]>([])
@@ -42,23 +45,46 @@ export default function PDFHighlighterComponent({ fileUrl, contractId }: PDFHigh
         setPdfUrl(url)
     }, [fileUrl])
 
-    // Fetch existing notes
-    useEffect(() => {
-        async function fetchNotes() {
-            const { data, error } = await getNotesByContract(contractId)
-            if (data && !error) {
-                // Map the DB notes back into react-pdf-highlighter highlight structures
-                const mappedHighlights = data.map(dbNote => ({
-                    id: dbNote.id,
-                    content: { text: dbNote.quote },
-                    comment: { text: dbNote.comment },
-                    position: dbNote.position_data
-                }))
-                setHighlights(mappedHighlights)
-            }
+    const parsedHighlights = useMemo(() => {
+        if (!notes || !Array.isArray(notes) || notes.length === 0) {
+            return EMPTY_HIGHLIGHTS;
         }
-        fetchNotes()
-    }, [contractId])
+
+        const validHighlights = notes.map((note) => {
+            // Handle cases where the position might be stored as a JSON string in the DB
+            let positionData;
+            const pos = note.position_data || note.position;
+            try {
+                positionData = typeof pos === 'string' ? JSON.parse(pos) : pos;
+            } catch (e) {
+                positionData = null;
+            }
+
+            // Only return if valid position data exists
+            if (positionData && positionData.boundingRect) {
+                return {
+                    id: String(note.id),
+                    content: { text: note.quote || note.content || note.text || '' },
+                    position: positionData,
+                    comment: { text: note.comment || '' }
+                };
+            }
+            return null;
+        }).filter(Boolean); // Remove any nulls (notes without valid coordinates)
+
+        return validHighlights.length > 0 ? validHighlights : EMPTY_HIGHLIGHTS;
+    }, [notes]);
+
+    // Combine parsed with local optimistic state
+    const allHighlights = useMemo(() => {
+        const parsedIds = new Set((parsedHighlights === EMPTY_HIGHLIGHTS ? [] : parsedHighlights).map((h: any) => h.id));
+        const optimistic = highlights.filter(h => !parsedIds.has(String(h.id)) && !parsedIds.has(h.id));
+
+        if (parsedHighlights === EMPTY_HIGHLIGHTS && optimistic.length === 0) {
+            return EMPTY_HIGHLIGHTS;
+        }
+        return [...(parsedHighlights === EMPTY_HIGHLIGHTS ? [] : parsedHighlights), ...optimistic];
+    }, [parsedHighlights, highlights]);
 
     useEffect(() => {
         setIsMounted(true);
@@ -103,6 +129,15 @@ export default function PDFHighlighterComponent({ fileUrl, contractId }: PDFHigh
         [contractId, router]
     )
 
+    // Scroll to highlight when scrollToId changes
+    useEffect(() => {
+        if (scrollToId && scrollToFnRef.current) {
+            const target = allHighlights.find((h: any) => h.id === scrollToId)
+            if (target) {
+                scrollToFnRef.current(target)
+            }
+        }
+    }, [scrollToId, allHighlights])
 
     const safeUrl = pdfUrl || fileUrl || "https://raw.githubusercontent.com/mozilla/pdf.js/ba2edeae/web/compressed.tracemonkey-pldi-09.pdf";
 
@@ -110,6 +145,8 @@ export default function PDFHighlighterComponent({ fileUrl, contractId }: PDFHigh
     if (!isMounted) {
         return <div className="h-full w-full flex items-center justify-center bg-[#1e1e24] text-white">Initializing Workspace...</div>;
     }
+
+    console.log("🔥 PARSED HIGHLIGHTS FOR RENDER:", parsedHighlights);
 
     return (
         <div className="flex-1 flex flex-col bg-[#1e1e24] relative z-10 w-full h-full border border-border-dark rounded-xl overflow-hidden shadow-2xl">
@@ -123,14 +160,30 @@ export default function PDFHighlighterComponent({ fileUrl, contractId }: PDFHigh
                 >
                     {(pdfDocument) => (
                         <PdfHighlighter
+                            key={`highlighter-${allHighlights.length}-${contractId}`} // Forces unmount on change
                             pdfDocument={pdfDocument}
                             enableAreaSelection={event => event.altKey}
                             onScrollChange={() => { }}
                             pdfScaleValue="page-width" // Critical for initial render calculations
-                            highlights={highlights.length > 0 ? highlights : EMPTY_HIGHLIGHTS} // Stable memory reference
-                            scrollRef={() => { }}
-                            highlightTransform={(highlight: any, index: number) => (
-                                <div key={index} className="bg-luxury-gold/40 absolute" style={{ ...highlight.position }}></div>
+                            highlights={allHighlights} // Stable memory reference
+                            scrollRef={(scrollTo) => {
+                                scrollToFnRef.current = scrollTo;
+                            }}
+                            highlightTransform={(
+                                highlight: any,
+                                index: number,
+                                setTip: any,
+                                hideTip: any,
+                                viewportToScaled: any,
+                                screenshot: any,
+                                isScrolledTo: boolean
+                            ) => (
+                                <Highlight
+                                    key={index}
+                                    isScrolledTo={isScrolledTo}
+                                    position={highlight.position}
+                                    comment={highlight.comment}
+                                />
                             )}
                             onSelectionFinished={(
                                 position,

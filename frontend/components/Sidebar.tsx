@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { OrganizationSwitcher, UserButton } from '@clerk/nextjs'
+import { OrganizationSwitcher, UserButton, ClerkLoaded, ClerkLoading } from '@clerk/nextjs'
 
 const navItems = [
     { href: '/dashboard', icon: 'dashboard', label: 'Dashboard', exact: true },
@@ -69,11 +69,21 @@ export default function Sidebar() {
                     )
                 })}
             </div>
-            <div className="flex items-center gap-3 bg-white/5 p-2 rounded justify-between">
-                <OrganizationSwitcher hidePersonal={true} />
-                <div>
-                    <UserButton afterSignOutUrl="/" showName />
-                </div>
+            <div className="flex items-center gap-3 bg-white/5 p-2 rounded justify-between min-h-[44px]">
+                <ClerkLoading>
+                    {/* Simple skeleton loader to prevent layout shift during SSR */}
+                    <div className="w-full flex justify-between items-center">
+                        <div className="h-8 w-24 bg-white/10 rounded animate-pulse"></div>
+                        <div className="h-8 w-8 bg-white/10 rounded-full animate-pulse"></div>
+                    </div>
+                </ClerkLoading>
+
+                <ClerkLoaded>
+                    <OrganizationSwitcher hidePersonal={true} />
+                    <div>
+                        <UserButton afterSignOutUrl="/" showName />
+                    </div>
+                </ClerkLoaded>
             </div>
         </nav>
     )

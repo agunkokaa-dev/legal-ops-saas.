@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { runComplianceShield, createNewMatter } from '@/app/actions/matterActions'
+import { deleteMatter } from '@/app/actions/matterActions'
 
 export default function NewMatterModal() {
     const [isOpen, setIsOpen] = useState(false)
@@ -15,7 +16,6 @@ export default function NewMatterModal() {
     const [shieldStatus, setShieldStatus] = useState<'idle' | 'safe' | 'warning'>('idle')
     const [isSubmitting, setIsSubmitting] = useState(false)
 
-    // Wajib untuk Next.js Client Component yang pakai Portal
     useEffect(() => {
         setMounted(true)
     }, [])
@@ -45,7 +45,7 @@ export default function NewMatterModal() {
         const formData = new FormData(e.currentTarget)
         const payload = {
             title: formData.get('title') as string,
-            description: formData.get('description') as string, // <-- AMBIL DATA SUMMARY
+            description: formData.get('description') as string,
             practice_area: formData.get('practice_area') as string,
             client_name: formData.get('client_name') as string,
         }
@@ -219,3 +219,4 @@ export default function NewMatterModal() {
         </>
     )
 }
+

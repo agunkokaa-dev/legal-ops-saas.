@@ -10,6 +10,6 @@ const PDFHighlighterComponent = dynamic(
     }
 );
 
-export default function PDFViewerWrapper(props: { fileUrl: string, contractId: string }) {
+export default function PDFViewerWrapper(props: { fileUrl: string, contractId: string, scrollToId?: string | null, notes?: any[] }) {
     return <PDFHighlighterComponent {...props} />;
 }

@@ -1,8 +1,8 @@
-import { getContractById } from '@/app/actions/documentActions';
+import { getContractById, getGraphData } from '@/app/actions/documentActions';
 import { getObligationsByMatter } from '@/app/actions/obligationActions';
 import { getNotesByContract } from '@/app/actions/noteActions';
-import IntelligenceSidebar from '@/components/contract-detail/IntelligenceSidebar';
-import PDFViewerWrapper from '@/components/contract-detail/PDFViewerWrapper';
+import { getMatterById } from '@/app/actions/matterActions';
+import ContractDetailClient from '@/components/contract-detail/ContractDetailClient';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -22,6 +22,10 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
         );
     }
 
+    // Fetch associated matter to get client name
+    const { data: matter } = await getMatterById(contract.matter_id);
+    const clientName = matter?.client_name || contract.counterparty_name || 'Unknown Client';
+
     // Fetch obligations
     const { data: allObligations } = await getObligationsByMatter(contract.matter_id);
     const obligations = allObligations?.filter((o: any) => o.contract_id === contract.id) || [];
@@ -29,6 +33,11 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
     // Fetch notes
     const { data: allNotes } = await getNotesByContract(contract.id);
     const notes = allNotes || [];
+
+    // Fetch genealogy
+    const { documents, relationships } = await getGraphData(contract.matter_id);
+    const graphDocs = documents || [];
+    const graphRels = relationships || [];
 
     // Safely format date
     const formattedDate = contract.created_at
@@ -69,10 +78,15 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
             </header>
 
             {/* Main Content Area */}
-            <div className="flex flex-1 overflow-hidden relative w-full">
-                <PDFViewerWrapper fileUrl={pdfUrl} contractId={contract.id} />
-                <IntelligenceSidebar contract={contract} obligations={obligations} notes={notes} />
-            </div>
+            <ContractDetailClient
+                pdfUrl={pdfUrl}
+                contract={contract}
+                obligations={obligations}
+                notes={notes}
+                clientName={clientName}
+                graphDocs={graphDocs}
+                graphRels={graphRels}
+            />
         </main>
     );
 }

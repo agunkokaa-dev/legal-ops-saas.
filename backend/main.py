@@ -11,6 +11,7 @@ from openai import OpenAI
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 import uuid
+import traceback
 from graph import clm_graph
 
 load_dotenv()
@@ -46,6 +47,12 @@ class MatterCreate(BaseModel):
     name: str
     description: str
     tenant_id: str
+
+class ClauseAssistantRequest(BaseModel):
+    message: str
+    contractId: str
+    matterId: str
+    userId: str = None
 
 @app.post("/api/matters")
 async def create_matter(matter: MatterCreate):
@@ -132,6 +139,9 @@ async def upload_contract(
             supabase.table("contracts").update({
                 "contract_value": final_state.get("contract_value", "Unknown"),
                 "end_date": final_state.get("end_date", "Unknown"),
+                "effective_date": final_state.get("effective_date", None),
+                "jurisdiction": final_state.get("jurisdiction", None),
+                "governing_law": final_state.get("governing_law", None),
                 "risk_level": risk_level,
                 "counter_proposal": final_state.get("counter_proposal"),
                 "draft_revisions": final_state.get("draft_revisions")
@@ -145,6 +155,9 @@ async def upload_contract(
                 "title": file.filename,
                 "contract_value": final_state.get("contract_value", "Unknown"),
                 "end_date": final_state.get("end_date", "Unknown"),
+                "effective_date": final_state.get("effective_date", None),
+                "jurisdiction": final_state.get("jurisdiction", None),
+                "governing_law": final_state.get("governing_law", None),
                 "risk_level": risk_level,
                 "counter_proposal": final_state.get("counter_proposal"),
                 "draft_revisions": final_state.get("draft_revisions")
@@ -327,4 +340,90 @@ async def chat_with_clause(
         }
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================================
+# 3. PHASE 4: CLAUSE ASSISTANT API (GENEALOGY-AWARE OBLIGATION EXPERT)
+# =====================================================================
+@app.post("/api/chat/clause-assistant")
+async def chat_clause_assistant(request: ClauseAssistantRequest):
+    try:
+        # 1. Fetch Contract Lineage (Genealogy)
+        contract_ids_to_search = []
+        if request.matterId:
+            try:
+                # Query all contracts sharing this matter_id
+                response = supabase.table("contracts").select("id").eq("matter_id", request.matterId).execute()
+                if response.data:
+                    contract_ids_to_search = [record["id"] for record in response.data]
+            except Exception as e:
+                print(f"Failed to fetch lineage for matter {request.matterId}: {e}")
+        
+        # Fallback to single contract search if matter lookup fails or no matterId provided
+        if not contract_ids_to_search:
+            contract_ids_to_search = [request.contractId]
+
+        print(f"Clause Assistant Lineage Context: {contract_ids_to_search}")
+
+        # 2. Embed the User's Query
+        question_vector = openai_client.embeddings.create(input=request.message, model="text-embedding-3-small").data[0].embedding
+
+        # 3. Filtered Vector Retrieval (Strict Genealogy Lineage)
+        search_results = qdrant.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=question_vector,
+            limit=10, 
+            query_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="contract_id", 
+                        match=models.MatchAny(any=contract_ids_to_search) # OR matching mechanism
+                    )
+                ]
+            )
+        )
+
+        if not search_results:
+            context = "Context: This contract has no matching clauses for this specific query, please answer based on general Indonesian Law principles but state no exact match was found."
+        else:
+            # 4. Compile Context
+            context_blocks = []
+            for hit in search_results:
+                text_snippet = hit.payload.get('text', '')
+                doc_id = hit.payload.get('contract_id', 'Unknown')
+                doc_type = "Current Contract" if doc_id == request.contractId else "Related Lineage Contract"
+                context_blocks.append(f"[{doc_type} / ID: {doc_id}]: {text_snippet}")
+            
+            context = "\n---\n".join(context_blocks)
+
+        # 5. Elite Indonesian Corporate Lawyer System Prompt
+        system_prompt = f"""You are an elite Indonesian Corporate Lawyer and Contract Negotiator.
+You are assisting a user in analyzing and drafting contract clauses.
+
+CRITICAL INSTRUCTIONS:
+1. Always base your legal analysis on Indonesian Law, specifically the Indonesian Civil Code (KUHPerdata) and relevant corporate regulations.
+2. You will be provided with context from a Vector Database containing the current contract AND its entire lineage (e.g., Master Agreements, Amendments). 
+3. Always check for cross-references. If the user asks about liability in an SOW, check if the Master Agreement (MSA) context overrides it.
+4. Answer in clear, professional Indonesian (or English if the user asks in English), but always maintain Indonesian legal terminology where appropriate.
+
+Context retrieved from the contract lineage:
+{context}
+"""
+
+        # 6. Generate Response
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": request.message}
+            ]
+        )
+
+        return {
+            "reply": response.choices[0].message.content
+        }
+
+    except Exception as e:
+        print(f"Clause Assistant Error: {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

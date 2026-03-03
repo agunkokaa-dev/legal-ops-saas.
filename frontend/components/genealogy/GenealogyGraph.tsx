@@ -23,10 +23,11 @@ const nodeTypes = {
 
 interface GenealogyGraphProps {
     documents?: any[],
-    relationships?: any[]
+    relationships?: any[],
+    currentContractId?: string
 }
 
-export default function GenealogyGraph({ documents = [], relationships = [] }: GenealogyGraphProps) {
+export default function GenealogyGraph({ documents = [], relationships = [], currentContractId }: GenealogyGraphProps) {
 
     // Dynamic generation from database records
     const { initialNodes, initialEdges } = useMemo(() => {
@@ -53,10 +54,12 @@ export default function GenealogyGraph({ documents = [], relationships = [] }: G
                 type: 'parent',
                 position: { x: 250 + (i * 400), y: 50 },
                 data: {
+                    id: parentDoc.id,
                     category: parentDoc.document_category || 'Parent Contract',
                     title: parentDoc.title,
                     dealValue: parentDoc.contract_value || 'Not analyzed',
-                    liabilityCap: parentDoc.risk_level || 'Unknown' // Map risk level as proxy if no cap exists
+                    liabilityCap: parentDoc.risk_level || 'Unknown', // Map risk level as proxy if no cap exists
+                    isCurrent: parentDoc.id === currentContractId
                 }
             })
         })
@@ -73,12 +76,14 @@ export default function GenealogyGraph({ documents = [], relationships = [] }: G
                 type: 'child',
                 position: { x: i * 300, y: 300 },
                 data: {
+                    id: childDoc.id,
                     category: childDoc.document_category || 'Document',
                     title: childDoc.title || 'Untitled Document',
                     status: status,
                     value: childDoc.contract_value || '', // Optional secondary text
                     progress: status === 'active' ? 50 : undefined,
                     warning: childDoc.risk_level === 'High',
+                    isCurrent: childDoc.id === currentContractId
                 }
             })
         })

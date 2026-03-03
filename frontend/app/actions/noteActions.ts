@@ -55,3 +55,24 @@ export async function createNote(data: { contractId: string, quote: string, comm
         return { error: e.message || "Failed to create contract note." }
     }
 }
+
+// 3. Delete Note
+export async function deleteNote(noteId: string) {
+    const { userId, orgId } = await auth()
+    if (!userId) return { error: "Unauthorized" }
+
+    const tenantId = orgId || userId
+
+    try {
+        const { error } = await supabaseAdmin
+            .from('contract_notes')
+            .delete()
+            .eq('id', noteId)
+            .eq('tenant_id', tenantId)
+
+        if (error) throw error
+        return { success: true }
+    } catch (e: any) {
+        return { error: e.message || "Failed to delete contract note." }
+    }
+}
