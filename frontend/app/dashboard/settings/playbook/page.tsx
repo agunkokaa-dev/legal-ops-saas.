@@ -1,0 +1,217 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useUser, useAuth } from '@clerk/nextjs'
+import { supabaseClient } from '@/lib/supabase'
+import { Plus, Loader2, BookOpen, AlertCircle, CheckCircle2 } from 'lucide-react'
+
+export default function CompanyPlaybookPage() {
+    const { user, isLoaded: isUserLoaded } = useUser()
+    const { getToken } = useAuth()
+
+    const [rules, setRules] = useState<any[]>([])
+    const [newRuleText, setNewRuleText] = useState('')
+    const [isLoading, setIsLoading] = useState(true)
+    const [isSubmitting, setIsSubmitting] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const [successMsg, setSuccessMsg] = useState<string | null>(null)
+
+    useEffect(() => {
+        if (isUserLoaded && user) {
+            fetchRules()
+        }
+    }, [isUserLoaded, user])
+
+    const fetchRules = async () => {
+        try {
+            setIsLoading(true)
+            setError(null)
+
+            if (!user) {
+                throw new Error("User session not found. Please log in again.");
+            }
+
+            const token = await getToken({ template: 'supabase' })
+            const supabase = await supabaseClient(token || '')
+
+            // 2. Fetch the rules for this specific user
+            const { data, error } = await supabase
+                .from('company_playbooks')
+                .select('*')
+                .eq('user_id', user.id) // Explicitly filter
+                .order('created_at', { ascending: false })
+
+            if (error) {
+                // Stringify the error to expose the hidden Supabase details
+                console.error('Supabase Error Details:', JSON.stringify(error, null, 2));
+                throw new Error(error.message || 'Failed to fetch rules from database.');
+            }
+
+            setRules(data || [])
+        } catch (err: any) {
+            console.error('Detailed fetch error:', err)
+            setError(err.message || 'An unexpected error occurred.')
+        } finally {
+            setIsLoading(false)
+        }
+    }
+
+    const handleAddRule = async (e: React.FormEvent) => {
+        e.preventDefault()
+        if (!newRuleText.trim() || !user) return
+
+        setIsSubmitting(true)
+        setError(null)
+        setSuccessMsg(null)
+
+        try {
+            const token = await getToken({ template: 'supabase' })
+            const supabase = await supabaseClient(token || '')
+
+            // 1. Insert into Supabase
+            const { data: newRule, error: supaError } = await supabase
+                .from('company_playbooks')
+                .insert([{ user_id: user.id, rule_text: newRuleText.trim() }])
+                .select()
+                .single()
+
+            if (supaError) throw supaError
+
+            // Update UI optimistically
+            setRules([{ ...newRule }, ...rules])
+            setNewRuleText('')
+
+            // 2. Send to Backend Vectorizer
+            const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+            const vectorRes = await fetch(`${backendUrl}/api/playbook/vectorize`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    rule_id: newRule.id,
+                    user_id: user.id,
+                    rule_text: newRule.rule_text
+                })
+            })
+
+            if (!vectorRes.ok) {
+                const errData = await vectorRes.json()
+                console.error("Vectorization Failed:", errData)
+                setError(`Rule saved to database, but vectorization failed: ${errData.detail || 'Unknown error'}`)
+            } else {
+                setSuccessMsg('Rule successfully saved and vectorized!')
+                setTimeout(() => setSuccessMsg(null), 3000)
+            }
+
+        } catch (err: any) {
+            console.error('Error adding rule:', err)
+            setError(err.message || 'Failed to submit rule.')
+        } finally {
+            setIsSubmitting(false)
+        }
+    }
+
+    if (!isUserLoaded) {
+        return <div className="p-8 flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-neutral-500" /></div>
+    }
+
+    return (
+        <div className="flex-1 w-full h-full p-8 overflow-y-auto bg-[#0a0a0a]">
+            {/* Header Section */}
+            <div className="mb-8 max-w-4xl mx-auto">
+                <div className="flex items-center gap-3 mb-2">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                        <BookOpen className="w-6 h-6 text-primary" />
+                    </div>
+                    <h1 className="text-3xl font-serif text-white tracking-tight">Company Playbook</h1>
+                </div>
+                <p className="text-neutral-400 text-sm">
+                    Define your custom contract guidelines. Our AI will automatically enforce these rules during contract review.
+                </p>
+            </div>
+
+            <div className="max-w-4xl mx-auto space-y-8">
+                {/* Form Section */}
+                <div className="bg-[#121212] border border-neutral-800 rounded-xl p-6 shadow-2xl">
+                    <h2 className="text-lg font-medium text-white mb-4">Add New Rule</h2>
+                    <form onSubmit={handleAddRule}>
+                        <div className="space-y-4">
+                            <textarea
+                                value={newRuleText}
+                                onChange={(e) => setNewRuleText(e.target.value)}
+                                placeholder="E.g., All counter-proposals regarding governing law must strictly enforce Indonesian jurisdiction (Jakarta)."
+                                className="w-full h-32 bg-[#1a1a1a] border border-neutral-700 text-white placeholder:text-neutral-500 rounded-lg p-4 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none transition-all"
+                                disabled={isSubmitting}
+                                required
+                            />
+
+                            {error && (
+                                <div className="flex items-center gap-2 text-sm text-red-400 bg-red-400/10 p-3 rounded-lg border border-red-500/20">
+                                    <AlertCircle className="w-4 h-4" />
+                                    {error}
+                                </div>
+                            )}
+
+                            {successMsg && (
+                                <div className="flex items-center gap-2 text-sm text-emerald-400 bg-emerald-400/10 p-3 rounded-lg border border-emerald-500/20">
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    {successMsg}
+                                </div>
+                            )}
+
+                            <div className="flex justify-end">
+                                <button
+                                    type="submit"
+                                    disabled={!newRuleText.trim() || isSubmitting}
+                                    className="flex items-center gap-2 px-6 py-2.5 bg-[#d4af37] hover:bg-[#c4a137] text-black font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin text-black" /> : <Plus className="w-4 h-4 text-black" />}
+                                    Save Rule
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+
+                {/* Rules List Section */}
+                <div>
+                    <h2 className="text-lg font-medium text-white mb-4 px-1">Active Guidelines</h2>
+
+                    {isLoading ? (
+                        <div className="flex items-center justify-center p-12 py-24 border border-neutral-800 rounded-xl bg-[#121212]/50 border-dashed">
+                            <Loader2 className="w-8 h-8 animate-spin text-neutral-600" />
+                        </div>
+                    ) : rules.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center p-12 py-24 border border-neutral-800 rounded-xl bg-[#121212]/50 border-dashed text-center">
+                            <BookOpen className="w-12 h-12 text-neutral-700 mb-4" />
+                            <h3 className="text-neutral-300 font-medium mb-1">No rules defined</h3>
+                            <p className="text-neutral-500 text-sm max-w-sm">
+                                Start defining your company playbook by adding a rule above.
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="grid gap-4">
+                            {rules.map((rule) => (
+                                <div
+                                    key={rule.id}
+                                    className="p-5 bg-[#121212] border border-neutral-800 rounded-xl hover:border-neutral-700 transition-colors shadow-sm group relative overflow-hidden"
+                                >
+                                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#d4af37]"></div>
+                                    <div className="flex gap-4 pl-3">
+                                        <div className="flex-1">
+                                            <p className="text-neutral-200 leading-relaxed text-sm">
+                                                {rule.rule_text}
+                                            </p>
+                                            <p className="text-[10px] text-neutral-500 mt-3 font-mono">
+                                                ID: {rule.id} | Added: {new Date(rule.created_at).toLocaleDateString()}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    )
+}

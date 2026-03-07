@@ -9,12 +9,11 @@ import {
     AreaHighlight
 } from 'react-pdf-highlighter'
 import 'react-pdf-highlighter/dist/style.css'
-import * as pdfjs from 'pdfjs-dist'
 import { getNotesByContract, createNote } from '@/app/actions/noteActions'
 import { useRouter } from 'next/navigation'
 // 1. Stable reference to prevent crash
 const EMPTY_HIGHLIGHTS: any[] = [];
-// 2. Strict worker version matching the Viewer
+// 2. Worker version MUST match the installed pdfjs-dist (4.4.168) used by react-pdf-highlighter
 const WORKER_URL = 'https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
 
 interface PDFHighlighterComponentProps {
@@ -32,6 +31,10 @@ export default function PDFHighlighterComponent({ fileUrl, contractId, scrollToI
     const [highlights, setHighlights] = useState<any[]>([])
     const [isSaving, setIsSaving] = useState(false)
     const [pdfUrl, setPdfUrl] = useState<string>('')
+
+    // Zoom State
+    const [scale, setScale] = useState(1.0)
+    const [totalPages, setTotalPages] = useState<number>(0)
 
     // Resolve Supabase Storage URL if needed, or use directly if it's already an absolute URL
     useEffect(() => {
@@ -147,63 +150,103 @@ export default function PDFHighlighterComponent({ fileUrl, contractId, scrollToI
     }
 
     console.log("🔥 PARSED HIGHLIGHTS FOR RENDER:", parsedHighlights);
+    console.log("📄 PDF URL trying to load:", safeUrl);
 
     return (
-        <div className="flex-1 flex flex-col bg-[#1e1e24] relative z-10 w-full h-full border border-border-dark rounded-xl overflow-hidden shadow-2xl">
-            {/* Document Render Area */}
-            <div className="flex-1 overflow-hidden relative w-full h-full bg-[#1e1e24]">
-                <PdfLoader
-                    url={safeUrl}
-                    workerSrc={WORKER_URL} /* STRICT BINDING: Bypasses global cache */
-                    beforeLoad={<div className="flex h-full w-full items-center justify-center text-white">Loading Document Engine...</div>}
-                    onError={(err: any) => <div className="p-10 text-red-500">Error: {String(err.message || err)}</div>}
-                >
-                    {(pdfDocument) => (
-                        <PdfHighlighter
-                            key={`highlighter-${allHighlights.length}-${contractId}`} // Forces unmount on change
-                            pdfDocument={pdfDocument}
-                            enableAreaSelection={event => event.altKey}
-                            onScrollChange={() => { }}
-                            pdfScaleValue="page-width" // Critical for initial render calculations
-                            highlights={allHighlights} // Stable memory reference
-                            scrollRef={(scrollTo) => {
-                                scrollToFnRef.current = scrollTo;
-                            }}
-                            highlightTransform={(
-                                highlight: any,
-                                index: number,
-                                setTip: any,
-                                hideTip: any,
-                                viewportToScaled: any,
-                                screenshot: any,
-                                isScrolledTo: boolean
-                            ) => (
-                                <Highlight
-                                    key={index}
-                                    isScrolledTo={isScrolledTo}
-                                    position={highlight.position}
-                                    comment={highlight.comment}
-                                />
-                            )}
-                            onSelectionFinished={(
-                                position,
-                                content,
-                                hideTipAndSelection,
-                                transformSelection
-                            ) => {
-                                // Provide a Tip/Pop-up to ask for the comment when text is selected
-                                return (
-                                    <HighlightCommentPrompt
-                                        onSave={(comment) => {
-                                            addHighlight({ content, position, comment: { text: comment } })
-                                            hideTipAndSelection()
-                                        }}
-                                        onCancel={hideTipAndSelection}
+        <div className="relative flex flex-col w-full h-[80vh] min-h-[600px] bg-[#121212] rounded-xl border border-neutral-800 overflow-hidden">
+
+            {/* INJECT PDF PAGE STYLES TO ENSURE WHITE PAPER VISIBILITY */}
+            <style dangerouslySetInnerHTML={{
+                __html: `
+      .pdfViewer .page {
+        background-color: #ffffff !important;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.5) !important;
+        margin: 20px auto !important;
+      }
+    `}} />
+
+            {/* Vertical Floating Control Pad (Bottom Left) */}
+            <div className="absolute bottom-6 left-6 flex flex-col items-center gap-2 bg-[#1A1A1A]/90 backdrop-blur-md border border-neutral-700 rounded-lg p-2 shadow-2xl z-50">
+                {/* Zoom In */}
+                <button onClick={() => setScale(s => Math.min(3.0, +(s + 0.25).toFixed(2)))} className="p-1.5 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-md transition-all" title="Zoom In">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                </button>
+
+                {/* Scale Indicator */}
+                <span className="text-[10px] text-neutral-300 font-mono text-center tracking-tighter">
+                    {Math.round(scale * 100)}%
+                </span>
+
+                {/* Zoom Out */}
+                <button onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))} className="p-1.5 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-md transition-all" title="Zoom Out">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
+                </button>
+
+                {/* Separator */}
+                <div className="w-4 h-px bg-neutral-700 my-1"></div>
+
+                {/* Page Info */}
+                <span className="text-[10px] text-neutral-400 font-medium text-center" title="Total Pages">
+                    {totalPages > 0 ? `${totalPages}p` : '...'}
+                </span>
+            </div>
+
+            {/* PDF RENDERER AREA - Flex-1 provides height naturally without crushing the library */}
+            <div className="flex-1 relative w-full h-full overflow-hidden">
+                <PdfLoader url={safeUrl} beforeLoad={<div className="flex h-full items-center justify-center text-neutral-500 font-medium">Loading Document Engine...</div>} workerSrc={WORKER_URL}>
+                    {(pdfDocument) => {
+                        // Safely update total pages state once the document is loaded
+                        if (totalPages !== pdfDocument.numPages) {
+                            setTimeout(() => setTotalPages(pdfDocument.numPages), 0);
+                        }
+
+                        return (
+                            <PdfHighlighter
+                                key={`highlighter-${scale}-${contractId}`} // Include scale to force re-init on zoom
+                                pdfDocument={pdfDocument}
+                                enableAreaSelection={(event) => event.altKey}
+                                onScrollChange={() => { }}
+                                pdfScaleValue={scale.toString()} // Apply manual state scale
+                                highlights={allHighlights} // Stable memory reference
+                                scrollRef={(scrollTo) => {
+                                    scrollToFnRef.current = scrollTo;
+                                }}
+                                highlightTransform={(
+                                    highlight: any,
+                                    index: number,
+                                    setTip: any,
+                                    hideTip: any,
+                                    viewportToScaled: any,
+                                    screenshot: any,
+                                    isScrolledTo: boolean
+                                ) => (
+                                    <Highlight
+                                        key={index}
+                                        isScrolledTo={isScrolledTo}
+                                        position={highlight.position}
+                                        comment={highlight.comment}
                                     />
-                                );
-                            }}
-                        />
-                    )}
+                                )}
+                                onSelectionFinished={(
+                                    position,
+                                    content,
+                                    hideTipAndSelection,
+                                    transformSelection
+                                ) => {
+                                    // Provide a Tip/Pop-up to ask for the comment when text is selected
+                                    return (
+                                        <HighlightCommentPrompt
+                                            onSave={(comment) => {
+                                                addHighlight({ content, position, comment: { text: comment } })
+                                                hideTipAndSelection()
+                                            }}
+                                            onCancel={hideTipAndSelection}
+                                        />
+                                    );
+                                }}
+                            />
+                        );
+                    }}
                 </PdfLoader>
             </div>
         </div>

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { deleteNote } from '@/app/actions/noteActions'
 import GenealogyGraph from '../genealogy/GenealogyGraph'
 import ClauseAssistant from './ClauseAssistant'
+import ObligationsTab from './ObligationsTab'
 
 export default function IntelligenceSidebar({
     contract,
@@ -27,6 +28,34 @@ export default function IntelligenceSidebar({
 }) {
     const [activeTab, setActiveTab] = useState<'Analysis' | 'Obligations' | 'Notes' | 'Genealogy' | 'Assistant'>('Analysis')
     const [isSaving, setIsSaving] = useState(false)
+
+    // Helper for formatting IDR
+    const formatIDR = (value: any) => {
+        if (value === null || value === undefined || value === '') {
+            return "Not specified";
+        }
+
+        // 1. Convert to string safely
+        const stringValue = String(value);
+
+        // 2. Strip ALL non-digit characters (removes spaces, letters, dots, commas, Rp, etc.)
+        const cleanString = stringValue.replace(/\D/g, '');
+
+        // 3. If after cleaning it's empty, it wasn't a number
+        if (cleanString === '') {
+            return "Invalid Amount";
+        }
+
+        // 4. Convert clean string to Number
+        const numericValue = Number(cleanString);
+
+        // 5. Format to IDR
+        return new Intl.NumberFormat('id-ID', {
+            style: 'currency',
+            currency: 'IDR',
+            minimumFractionDigits: 0
+        }).format(numericValue);
+    };
 
     return (
         <div className="flex flex-col h-full w-[400px] bg-surface border-l border-white/10 z-10 flex-shrink-0">
@@ -88,6 +117,12 @@ export default function IntelligenceSidebar({
                                                 {contract?.effective_date || contract?.start_date || contract?.end_date || 'Not specified'}
                                             </span>
                                         </div>
+                                        <div className="flex justify-between items-center p-3 hover:bg-white/5 transition-colors">
+                                            <span className="text-[11px] text-text-muted">Contract Value</span>
+                                            <span className="text-[11px] text-white font-medium text-right" suppressHydrationWarning>
+                                                {formatIDR(contract?.contract_value)}
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -146,25 +181,9 @@ export default function IntelligenceSidebar({
                             animate={{ opacity: 1, x: 0 }}
                             exit={{ opacity: 0, x: -20 }}
                             transition={{ duration: 0.25, ease: "easeInOut" }}
-                            className="h-full overflow-y-auto p-5"
+                            className="h-full"
                         >
-                            <div className="flex flex-col gap-3">
-                                {obligations.length === 0 ? (
-                                    <div className="text-text-muted text-xs p-4 text-center border border-dashed border-surface-border rounded-lg">
-                                        No obligations extracted for this document.
-                                    </div>
-                                ) : (
-                                    obligations.map((obs: any, idx: number) => (
-                                        <div key={obs.id || idx} className="bg-background rounded-lg p-3 border border-surface-border hover:border-[#d4af37]/30 transition-colors">
-                                            <p className="text-white text-xs leading-relaxed mb-2">{obs.obligation_text}</p>
-                                            <div className="flex justify-between items-center text-[10px]">
-                                                <span className="text-text-muted">Due Date</span>
-                                                <span className="text-[#d4af37]">{obs.due_date ? new Date(obs.due_date).toISOString().split('T')[0] : 'N/A'}</span>
-                                            </div>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
+                            <ObligationsTab contractId={contract?.id} />
                         </motion.div>
                     )}
 

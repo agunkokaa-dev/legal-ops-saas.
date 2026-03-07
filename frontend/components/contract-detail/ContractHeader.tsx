@@ -1,0 +1,212 @@
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import { createClient } from '@supabase/supabase-js'
+
+// Initialize Supabase (Client-side usage with public key)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+export default function ContractHeader({
+    initialContract,
+    formattedDate
+}: {
+    initialContract: any,
+    formattedDate: string
+}) {
+    const [contract, setContract] = useState(initialContract)
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false)
+    const [isSaving, setIsSaving] = useState(false)
+    const [editForm, setEditForm] = useState({
+        title: initialContract?.title || '',
+        status: initialContract?.status || 'DRAFT',
+        contract_value: initialContract?.contract_value || '',
+        risk_level: initialContract?.risk_level || 'LOW',
+        end_date: initialContract?.end_date || ''
+    })
+
+    const handleUpdateContract = async (e: React.FormEvent) => {
+        e.preventDefault()
+        setIsSaving(true)
+
+        try {
+            const { data, error } = await supabase
+                .from('contracts')
+                .update({
+                    title: editForm.title,
+                    status: editForm.status,
+                    contract_value: editForm.contract_value ? parseFloat(editForm.contract_value.toString()) : null,
+                    risk_level: editForm.risk_level,
+                    end_date: editForm.end_date || null
+                })
+                .eq('id', contract.id)
+                .select()
+                .single()
+
+            if (error) throw error
+
+            // Update local state to reflect changes instantly
+            setContract(data)
+            setIsEditModalOpen(false)
+        } catch (error) {
+            console.error('Error updating contract:', error)
+            // Optionally add a toast notification here
+        } finally {
+            setIsSaving(false)
+        }
+    }
+
+    // Modal Style Helpers
+    const modalInputStyling = "w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-lux-gold focus:border-lux-gold transition-colors"
+    const labelStyling = "block text-xs font-medium text-neutral-400 mb-1.5"
+
+    return (
+        <header className="h-16 bg-background border-b border-surface-border flex items-center justify-between px-6 flex-shrink-0 z-20 w-full relative">
+            <div className="flex items-center gap-4">
+                <Link href={`/dashboard/matters/${contract.matter_id}`} className="text-text-muted hover:text-white transition-colors flex items-center">
+                    <span className="material-symbols-outlined">arrow_back</span>
+                </Link>
+                <div className="flex flex-col">
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-base font-serif font-bold text-white tracking-tight">
+                            {contract.title || contract.file_url || 'Unknown Contract'}
+                        </h2>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#fbbf24]/10 text-[#fbbf24] border border-[#fbbf24]/20">
+                            Status: {contract.status || 'DRAFT'}
+                        </span>
+                        <button
+                            onClick={() => setIsEditModalOpen(true)}
+                            className="text-text-muted hover:text-white flex items-center transition-colors hover:bg-white/5 p-1 rounded-full"
+                            title="Edit Contract Details"
+                        >
+                            <span className="material-symbols-outlined text-sm">edit</span>
+                        </button>
+                    </div>
+                    <p className="text-text-muted text-[11px] mt-0.5">
+                        Client • 4 • Last modified: {formattedDate}
+                    </p>
+                </div>
+            </div>
+
+            {/* Edit Contract Modal (Rendered inline to keep things simple) */}
+            {isEditModalOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+
+                        {/* Modal Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800 bg-neutral-900/50">
+                            <h3 className="text-lg font-serif font-bold text-white">Edit Contract Details</h3>
+                            <button
+                                onClick={() => setIsEditModalOpen(false)}
+                                className="text-neutral-400 hover:text-white transition-colors rounded-full hover:bg-white/5 p-1"
+                            >
+                                <span className="material-symbols-outlined text-xl">close</span>
+                            </button>
+                        </div>
+
+                        {/* Modal Body */}
+                        <form onSubmit={handleUpdateContract} className="p-6 flex flex-col gap-5 overflow-y-auto max-h-[70vh]">
+
+                            {/* Document Name */}
+                            <div>
+                                <label className={labelStyling}>Document Name</label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={editForm.title}
+                                    onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                                    className={modalInputStyling}
+                                    placeholder="Enter contract title"
+                                />
+                            </div>
+
+                            {/* Two Column Grid */}
+                            <div className="grid grid-cols-2 gap-4">
+                                {/* Status */}
+                                <div>
+                                    <label className={labelStyling}>Status</label>
+                                    <select
+                                        value={editForm.status}
+                                        onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                                        className={modalInputStyling}
+                                    >
+                                        <option value="DRAFT">DRAFT</option>
+                                        <option value="ACTIVE">ACTIVE</option>
+                                        <option value="EXPIRED">EXPIRED</option>
+                                        <option value="TERMINATED">TERMINATED</option>
+                                    </select>
+                                </div>
+
+                                {/* Risk Level */}
+                                <div>
+                                    <label className={labelStyling}>Risk Level</label>
+                                    <select
+                                        value={editForm.risk_level}
+                                        onChange={(e) => setEditForm({ ...editForm, risk_level: e.target.value })}
+                                        className={modalInputStyling}
+                                    >
+                                        <option value="LOW">LOW</option>
+                                        <option value="MEDIUM">MEDIUM</option>
+                                        <option value="HIGH">HIGH</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Contract Value */}
+                            <div>
+                                <label className={labelStyling}>Contract Value (Rp / IDR)</label>
+                                <div className="relative">
+                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500 font-medium">Rp</span>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={editForm.contract_value}
+                                        onChange={(e) => setEditForm({ ...editForm, contract_value: e.target.value })}
+                                        className={`${modalInputStyling} pl-10`}
+                                        placeholder="100000000"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* End Date */}
+                            <div>
+                                <label className={labelStyling}>End Date</label>
+                                <input
+                                    type="date"
+                                    value={editForm.end_date}
+                                    onChange={(e) => setEditForm({ ...editForm, end_date: e.target.value })}
+                                    className={`${modalInputStyling} [color-scheme:dark]`}
+                                />
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex gap-3 mt-4 justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsEditModalOpen(false)}
+                                    className="px-5 py-2.5 rounded-lg text-sm font-medium text-neutral-300 hover:text-white hover:bg-white/5 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSaving}
+                                    className="px-5 py-2.5 rounded-lg text-sm font-medium bg-lux-gold text-black hover:bg-amber-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[100px]"
+                                >
+                                    {isSaving ? (
+                                        <span className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin"></span>
+                                    ) : (
+                                        "Save Changes"
+                                    )}
+                                </button>
+                            </div>
+
+                        </form>
+                    </div>
+                </div>
+            )}
+        </header>
+    )
+}

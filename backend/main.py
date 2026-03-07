@@ -20,7 +20,11 @@ app = FastAPI(title="CLAUSE Intelligent Engine", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://127.0.0.1:3000",
+        "http://173.212.240.143"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,6 +47,12 @@ if COLLECTION_NAME not in collection_names:
         vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
     )
 
+if "company_rules" not in collection_names:
+    qdrant.create_collection(
+        collection_name="company_rules",
+        vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+    )
+
 class MatterCreate(BaseModel):
     name: str
     description: str
@@ -53,6 +63,133 @@ class ClauseAssistantRequest(BaseModel):
     contractId: str
     matterId: str
     userId: str = None
+
+class PlaybookRuleRequest(BaseModel):
+    rule_id: str
+    user_id: str
+    rule_text: str
+
+class ExtractObligationsRequest(BaseModel):
+    contract_id: str
+    user_id: str
+
+@app.post("/api/playbook/vectorize")
+async def vectorize_playbook_rule(request: PlaybookRuleRequest):
+    try:
+        # 1. Get embedding
+        vector = openai_client.embeddings.create(input=request.rule_text, model="text-embedding-3-small").data[0].embedding
+        
+        # 2. Upsert to Qdrant 'company_rules' collection
+        qdrant.upsert(
+            collection_name="company_rules",
+            points=[PointStruct(
+                id=request.rule_id, 
+                vector=vector,
+                payload={
+                    "user_id": request.user_id, 
+                    "rule_text": request.rule_text, 
+                    "rule_id": request.rule_id
+                }
+            )]
+        )
+        
+        return {"status": "success", "message": "Rule successfully vectorized and stored in Qdrant."}
+    except Exception as e:
+        print(f"Playbook Vectorization Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/obligations/extract")
+async def extract_obligations(request: ExtractObligationsRequest):
+    try:
+        import json
+        
+        # 1. Fetch Contract Text from Qdrant
+        contract_res = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=Filter(must=[FieldCondition(key="contract_id", match=models.MatchValue(value=request.contract_id))]),
+            limit=100
+        )
+        
+        contract_text = ""
+        for hit in contract_res[0]:
+            contract_text += hit.payload.get("text", "") + "\n\n"
+            
+        if not contract_text.strip():
+            raise HTTPException(status_code=404, detail="Contract text not found in vector database.")
+
+        # 2. Fetch Playbook Rules from Qdrant
+        rules_res = qdrant.scroll(
+            collection_name="company_rules",
+            scroll_filter=Filter(must=[FieldCondition(key="user_id", match=models.MatchValue(value=request.user_id))]),
+            limit=50
+        )
+        
+        playbook_rules = ""
+        if rules_res[0]:
+            for hit in rules_res[0]:
+                playbook_rules += f"- {hit.payload.get('rule_text', '')}\n"
+        else:
+            playbook_rules = "No custom playbook rules defined."
+
+        # 3. Call OpenAI for Extraction & Compliance Check
+        system_prompt = """
+You are an Elite Indonesian Corporate Lawyer AI. Read the provided CONTRACT TEXT.
+Your task is to extract ONLY actionable obligations (things a party MUST DO, such as paying, delivering, or reporting). 
+DO NOT extract general facts, background information, or declarations.
+
+CRITICAL RULES:
+1. ALWAYS write the output in INDONESIAN (Bahasa Indonesia).
+2. Format each obligation clearly, starting with the responsible party. Example: "Vendor wajib..." or "Klien wajib...".
+3. Evaluate each obligation against the provided COMPANY PLAYBOOK RULES.
+
+Return a JSON object containing an array called 'obligations' with keys:
+- 'description': (string) The actionable obligation in Indonesian.
+- 'due_date': (string) The deadline, or 'N/A'.
+- 'compliance_flag': (string) MUST BE 'SAFE' or 'CONFLICT' (if it violates the playbook).
+"""
+        user_prompt = f"COMPANY PLAYBOOK RULES:\n{playbook_rules}\n\nCONTRACT TEXT:\n{contract_text}"
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={ "type": "json_object" }
+        )
+        
+        raw_output = response.choices[0].message.content
+        extracted_data = json.loads(raw_output)
+        obligations_list = extracted_data.get("obligations", [])
+        
+        if not obligations_list:
+            return {"status": "success", "message": "No obligations found.", "data": []}
+
+        # 4. Save to Supabase
+        insert_payload = []
+        for ob in obligations_list:
+            insert_payload.append({
+                "contract_id": request.contract_id,
+                "user_id": request.user_id, # FIX: use real column name
+                "description": ob.get("description", "Unknown obligation"),
+                "due_date": ob.get("due_date", None) if ob.get("due_date") != "N/A" else None,
+                "status": "pending",
+                "source": "AI",
+                "compliance_flag": ob.get("compliance_flag", "SAFE")
+            })
+            
+        db_res = supabase.table("contract_obligations").insert(insert_payload).execute()
+        
+        return {
+            "status": "success", 
+            "message": f"Successfully extracted {len(obligations_list)} obligations.",
+            "data": db_res.data
+        }
+    except Exception as e:
+        print(f"Obligation Extraction Error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/matters")
 async def create_matter(matter: MatterCreate):
@@ -363,6 +500,16 @@ async def chat_clause_assistant(request: ClauseAssistantRequest):
         if not contract_ids_to_search:
             contract_ids_to_search = [request.contractId]
 
+        # Fetch titles for all relevant contracts
+        contract_titles = {}
+        try:
+            titles_resp = supabase.table("contracts").select("id, title").in_("id", contract_ids_to_search).execute()
+            if titles_resp.data:
+                for record in titles_resp.data:
+                    contract_titles[record["id"]] = record.get("title", "Unknown Document")
+        except Exception as e:
+            print(f"Failed to fetch contract titles: {e}")
+
         print(f"Clause Assistant Lineage Context: {contract_ids_to_search}")
 
         # 2a. Fetch Historical Context from Supabase (Agent Analysis)
@@ -392,11 +539,13 @@ async def chat_clause_assistant(request: ClauseAssistantRequest):
         # 3. Embed the User's Query
         question_vector = openai_client.embeddings.create(input=request.message, model="text-embedding-3-small").data[0].embedding
 
-        # 4. Filtered Vector Retrieval (Strict Genealogy Lineage)
-        search_results = qdrant.search(
+        # 4. Filtered Vector Retrieval (DUAL RAG)
+        
+        # 4a. Client Contract Search (Strict Genealogy Lineage)
+        contract_results = qdrant.search(
             collection_name=COLLECTION_NAME,
             query_vector=question_vector,
-            limit=10, 
+            limit=4, 
             query_filter=Filter(
                 must=[
                     FieldCondition(
@@ -407,31 +556,62 @@ async def chat_clause_assistant(request: ClauseAssistantRequest):
             )
         )
 
-        if not search_results:
-            context = "Context: This contract has no matching clauses for this specific query, please answer based on general Indonesian Law principles but state no exact match was found."
+        # 4b. National Law Search
+        try:
+            law_results = qdrant.search(
+                collection_name="id_national_laws",
+                query_vector=question_vector,
+                limit=2
+            )
+        except Exception as e:
+            print(f"Warning: Failed to search 'id_national_laws'. {e}")
+            law_results = []
+            
+        import re
+
+        # Assemble context string
+        combined_context = "=== KONTEKS KONTRAK (DOKUMEN KLIEN) ===\n"
+        if not contract_results:
+            combined_context += "Tidak ada klausul yang cocok dengan kueri ini di dokumen klien.\n\n"
         else:
-            # Compile Context
-            context_blocks = []
-            for hit in search_results:
+            for hit in contract_results:
                 text_snippet = hit.payload.get('text', '')
                 doc_id = hit.payload.get('contract_id', 'Unknown')
-                doc_type = "Current Contract" if doc_id == request.contractId else "Related Lineage Contract"
-                context_blocks.append(f"[{doc_type} / ID: {doc_id}]: {text_snippet}")
-            
-            context = "\n---\n".join(context_blocks)
+                doc_name = contract_titles.get(doc_id, "Unknown Document")
+                
+                # Extract page number securely
+                page_match = re.search(r'\[Page (\d+)\]', text_snippet)
+                if page_match:
+                    citation_tag = f"[{doc_name}, Hal: {page_match.group(1)}]"
+                else:
+                    citation_tag = f"[{doc_name}]"
+                    
+                combined_context += f"TAG SUMBER: {citation_tag}\nTeks: {text_snippet}\n\n"
 
-        # 5. Elite Indonesian Corporate Lawyer System Prompt (with mandatory citations and historical data)
+        combined_context += "=== KONTEKS HUKUM NASIONAL (INDONESIA) ===\n"
+        if not law_results:
+            combined_context += "Tidak ada pasal hukum nasional yang cocok dengan kueri ini.\n\n"
+        else:
+            for hit in law_results:
+                source = hit.payload.get("source_law", "Unknown Law")
+                pasal = hit.payload.get("pasal", "Unknown Pasal")
+                text = hit.payload.get("text", "")
+                combined_context += f"TAG SUMBER: [{source}, Pasal {pasal}]\nTeks: {text}\n\n"
+
+        # 5. Elite Indonesian Corporate Lawyer System Prompt (with dual RAG)
         system_prompt = f"""You are an elite Indonesian Corporate Lawyer and Contract Negotiator.
 You are assisting a user in analyzing and drafting contract clauses.
+You are provided with two contexts: 'KONTEKS KONTRAK' (the client's document) and 'KONTEKS HUKUM NASIONAL' (Indonesian laws).
+Your job is to answer the user's query by analyzing the contract and, IF RELEVANT, validating it against the National Law.
 
 CRITICAL INSTRUCTIONS:
 1. Always base your legal analysis on Indonesian Law (KUHPerdata, UU PT, and relevant corporate regulations).
 2. You will be provided with context from a Vector Database containing the current contract AND its entire lineage (e.g., Master Agreements, Amendments, SOWs).
 3. Always check for cross-references. If the user asks about liability in an SOW, check if the Master Agreement (MSA) context overrides it.
-4. CITATIONS ARE MANDATORY:
-    - When quoting or summarizing from the provided document context, ALWAYS cite the source document name, section, or page in parentheses (e.g., "Berdasarkan [Nama Dokumen SOW], Pasal 3...").
-    - When referencing general Indonesian Law, cite the specific code or law (e.g., "Menurut KUHPerdata Pasal 1320...").
-    - Never make legal claims without citing either the document context or applicable law.
+4. CRITICAL CITATION RULES:
+    - You MUST cite your sources inline.
+    - If quoting the contract, copy the exact tag (e.g., [MSA.pdf, Hal: 1]).
+    - If applying national law, copy the exact tag (e.g., [KUHPerdata Buku III, Pasal 1320]).
 5. Format your response using clean Markdown: use **bold** for emphasis, bullet points for lists, and numbered lists for sequential steps.
 6. Answer in clear, professional Indonesian (or English if the user asks in English), but always maintain Indonesian legal terminology where appropriate.
 
@@ -454,9 +634,11 @@ If the user intent is detected as drafting, revising, or proposing a counter-arg
 **THE COUNTER-ARGUMENT:**
 *(Why this is better for the client, mitigating risks based on historical data or applicable law)*
 
-Context retrieved from the contract lineage (Vector DB):
-{context}
+Context retrieved from the DB:
+{combined_context}
 """
+
+        print("\n--- DUAL RAG CONTEXT SENT TO LLM ---\n", combined_context)
 
         # 6. Generate Response
         response = openai_client.chat.completions.create(

@@ -56,7 +56,7 @@ export default function ClauseAssistant({
             // Add temporary AI loading message
             setMessages(prev => [...prev, { id: 'loading', role: 'ai', content: '...' }]);
 
-            const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://173.212.240.143:8000';
             const response = await fetch(`${backendUrl}/api/chat/clause-assistant`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
