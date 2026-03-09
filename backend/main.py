@@ -811,11 +811,115 @@ async def apply_template(request: ApplyTemplateRequest, tenant_id: str):
 
 @app.post("/api/v1/ai/task-assistant")
 async def ask_clause_assistant(req: TaskAssistantRequest):
-    # Log to Docker console for debugging
-    print(f"🤖 [TASK AI] Request received for Task: {req.task_id}")
-    print(f"💬 User Message: {req.message}")
+    try:
+        print(f"🤖 [TASK AI] Processing Task ID: {req.task_id} | Matter: {req.matter_id}")
 
-    # Return a temporary mock response to satisfy the frontend and clear the 404
-    mock_reply = f"Connected! I am ready to assist with task {req.task_id}. Your message was: '{req.message}'. (RAG integration pending)."
-    
-    return {"reply": mock_reply}
+        # 1. FETCH TASK CONTEXT FROM SUPABASE
+        task_context_str = "Unknown Task"
+        try:
+            task_resp = supabase.table("tasks").select("title, description").eq("id", req.task_id).execute()
+            if task_resp.data:
+                t_title = task_resp.data[0].get('title', '')
+                t_desc = task_resp.data[0].get('description', '')
+                task_context_str = f"Task Title: {t_title} | Description: {t_desc}"
+        except Exception as e:
+            print(f"Warning: Failed to fetch task context: {e}")
+
+        # 2. FETCH MATTER LINEAGE (All contracts under this matter)
+        contract_ids_to_search = []
+        contract_titles = {}
+        try:
+            contracts_resp = supabase.table("contracts").select("id, title").eq("matter_id", req.matter_id).execute()
+            if contracts_resp.data:
+                for record in contracts_resp.data:
+                    contract_ids_to_search.append(record["id"])
+                    contract_titles[record["id"]] = record.get("title", "Unknown Document")
+        except Exception as e:
+            print(f"Failed to fetch lineage for matter {req.matter_id}: {e}")
+
+        # If no contracts found, we can't do RAG properly, but we still proceed
+        if not contract_ids_to_search:
+             print("Warning: No contracts found for this matter.")
+             
+        # 3. EMBED THE USER QUERY
+        question_vector = openai_client.embeddings.create(input=req.message, model="text-embedding-3-small").data[0].embedding
+
+        # 4. DUAL RAG RETRIEVAL
+        combined_context = "=== KONTEKS TUGAS (TASK) SAAT INI ===\n"
+        combined_context += f"{task_context_str}\n\n"
+        
+        combined_context += "=== KONTEKS KONTRAK (DOKUMEN KLIEN) ===\n"
+        if contract_ids_to_search:
+            contract_results = qdrant.search(
+                collection_name=COLLECTION_NAME,
+                query_vector=question_vector,
+                limit=4, 
+                query_filter=models.Filter(
+                    must=[models.FieldCondition(key="contract_id", match=models.MatchAny(any=contract_ids_to_search))]
+                )
+            )
+            for hit in contract_results:
+                text_snippet = hit.payload.get('text', '')
+                doc_id = hit.payload.get('contract_id', 'Unknown')
+                doc_name = contract_titles.get(doc_id, "Unknown Document")
+                combined_context += f"TAG SUMBER: [{doc_name}]\nTeks: {text_snippet}\n\n"
+        else:
+            combined_context += "Tidak ada dokumen kontrak yang terhubung dengan Matter ini.\n\n"
+
+        combined_context += "=== KONTEKS HUKUM NASIONAL (INDONESIA) ===\n"
+        try:
+            law_results = qdrant.search(
+                collection_name="id_national_laws",
+                query_vector=question_vector,
+                limit=2
+            )
+            for hit in law_results:
+                source = hit.payload.get("source_law", "Unknown Law")
+                pasal = hit.payload.get("pasal", "Unknown Pasal")
+                text = hit.payload.get("text", "")
+                combined_context += f"TAG SUMBER: [{source}, Pasal {pasal}]\nTeks: {text}\n\n"
+        except Exception as e:
+            print(f"Warning: Failed to search 'id_national_laws'. {e}")
+
+        # 5. INJECT ACTIONABLE SILENT LUXURY SYSTEM PROMPT
+        system_prompt = f"""You are Clause, a highly paid Senior Legal Counsel Assistant at an elite Indonesian law firm.
+Your primary goal is to help the user complete their CURRENT TASK based on the provided Matter documents and National Laws.
+
+CRITICAL INSTRUCTIONS (SILENT LUXURY FORMAT):
+1. NEVER use conversational filler, greetings, opening narratives, or polite closing paragraphs (e.g., 'Semoga membantu', 'Berikut adalah...'). Start immediately with the headers.
+2. Use extreme brevity, bold text for emphasis, and highly professional legal terminology.
+3. Always cite the exact source document and clause in brackets [ ].
+4. If asked about obligations or procedural steps, you MUST format your response EXACTLY like this structure:
+
+⚖️ **OBLIGATION ANALYSIS**
+[ 1 ] **[Obligation Category/Name]**
+- **Kewajiban:** [Brief, sharp description]
+- **Tenggat Waktu:** [If applicable, otherwise omit]
+- **Sumber:** [Exact Document Name, Pasal/Clause]
+
+⚡ **RECOMMENDED NEXT STEPS (ACTIONABLE)**
+For EVERY recommended next step, you MUST format it strictly as a Markdown link with the exact href (#add-task)`. Do not use standard text.
+Example format:
+- [+ Add Task: Validasi penerimaan Invoice fisik dari vendor](action:add-task)
+- [+ Add Task: Jadwalkan UAT untuk fitur Scan Barcode](action:add-task)
+
+Context retrieved from Database:
+{combined_context}
+"""
+        
+        # 6. GENERATE RESPONSE
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": req.message}
+            ]
+        )
+
+        return {"reply": response.choices[0].message.content}
+
+    except Exception as e:
+        print(f"Task Assistant RAG Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal Server Error during AI execution.")

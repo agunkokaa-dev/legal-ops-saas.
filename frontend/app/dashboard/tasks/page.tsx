@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth, useSession } from "@clerk/nextjs";
 import { createClient } from '@supabase/supabase-js';
 import { supabaseClient } from "@/lib/supabase";
+import ReactMarkdown from 'react-markdown';
 import {
     Search,
     Plus,
@@ -46,6 +47,7 @@ export default function TasksDashboardPage() {
     const [activeAiTask, setActiveAiTask] = useState<any>(null);
     const [aiInput, setAiInput] = useState("");
     const [aiMessages, setAiMessages] = useState<{ role: 'user' | 'ai', content: string }[]>([]);
+    const [isAiTyping, setIsAiTyping] = useState(false);
 
     const handleSendAiMessage = async () => {
         if (!aiInput.trim() || !activeAiTask) return;
@@ -55,14 +57,14 @@ export default function TasksDashboardPage() {
         // 1. Update UI: Add User Message & Thinking State
         setAiMessages(prev => [
             ...prev,
-            { role: 'user', content: userMessage },
-            { role: 'ai', content: "Connecting to Intelligence Engine..." }
+            { role: 'user', content: userMessage }
         ]);
         setAiInput("");
+        setIsAiTyping(true);
 
         try {
             // Change this URL if your FastAPI is running on a different port/address
-            const API_URL = 'http://localhost:8000/api/v1/ai/task-assistant';
+            const API_URL = 'http://127.0.0.1:8000/api/v1/ai/task-assistant';
 
             const response = await fetch(API_URL, {
                 method: 'POST',
@@ -99,6 +101,62 @@ export default function TasksDashboardPage() {
                 };
                 return updated;
             });
+        } finally {
+            setIsAiTyping(false);
+        }
+    };
+
+    const handleCreateAiSubtask = async (title: string, taskId: string | undefined) => {
+        console.log("⚡ [DEBUG] Memulai handleCreateAiSubtask...");
+
+        if (!taskId) {
+            console.error("❌ [DEBUG] ERROR: taskId kosong/undefined! Cari tahu nama state task yang benar.");
+            alert("System Error: Task ID tidak ditemukan.");
+            return;
+        }
+
+        // Clean up the string (remove the "+ Add Task:" prefix and markdown bolding if present)
+        const cleanTitle = title.replace(/\+ Add Task:/g, '').replace(/\*\*/g, '').trim();
+        console.log("⚡ [DEBUG] Data siap dikirim ke Supabase:", { task_id: taskId, title: cleanTitle });
+
+        try {
+            const supabase = await getAuthenticatedSupabase();
+            if (!supabase) {
+                console.error("❌ [DEBUG] Supabase client not authenticated.");
+                return;
+            }
+
+            const { data, error } = await supabase
+                .from('task_checklists')
+                .insert({
+                    task_id: taskId,
+                    item: cleanTitle,
+                    is_done: false
+                })
+                .select()
+                .single();
+
+            if (error) {
+                console.error("❌ [DEBUG] Supabase Insert Error:", error);
+                throw error;
+            }
+
+            console.log("✅ [DEBUG] Berhasil insert ke Supabase:", data);
+            alert(`⚡ Berhasil! Sub-task "${cleanTitle}" telah ditambahkan ke database.`);
+
+            // Refresh side panel if it's open for this task
+            if (selectedTask?.id === taskId) {
+                console.log("⚡ [DEBUG] Refreshing Task Details UI...");
+                await fetchTaskDetails();
+            } else {
+                // otherwise just fetch tasks again to update progress markers
+                console.log("⚡ [DEBUG] Refreshing Tasks Board UI...");
+                await fetchTasks();
+            }
+
+        } catch (error) {
+            console.error("❌ [DEBUG] Catch Block Error:", error);
+            alert("Gagal menambahkan sub-task. Cek console log.");
         }
     };
 
@@ -1056,10 +1114,67 @@ export default function TasksDashboardPage() {
 
                             {/* Mapped Messages */}
                             {aiMessages.map((msg, idx) => (
-                                <div key={idx} className={`p-3 rounded-lg max-w-[85%] ${msg.role === 'user' ? 'bg-clause-gold/20 border border-clause-gold/30 self-end text-white' : 'bg-white/5 border border-white/10 self-start text-white/80'}`}>
-                                    <p>{msg.content}</p>
+                                <div key={idx} className={`p-3.5 rounded-xl max-w-[85%] shadow-lg ${msg.role === 'user' ? 'bg-clause-gold/20 border border-clause-gold/30 self-end text-white' : 'bg-white/5 border border-white/10 self-start text-white/90'}`}>
+                                    {msg.role === 'user' ? (
+                                        <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                                    ) : (
+                                        <div className="text-sm">
+                                            <ReactMarkdown
+                                                components={{
+                                                    p: ({ node, ...props }) => <p className="mb-3 last:mb-0 leading-relaxed" {...props} />,
+                                                    strong: ({ node, ...props }) => <strong className="font-bold text-clause-gold" {...props} />,
+                                                    ul: ({ node, ...props }) => <ul className="list-disc ml-5 mb-3 space-y-1.5" {...props} />,
+                                                    ol: ({ node, ...props }) => <ol className="list-decimal ml-5 mb-3 space-y-1.5" {...props} />,
+                                                    li: ({ node, ...props }) => <li className="pl-1" {...props} />,
+                                                    a: ({ node, href, children, ...props }) => {
+                                                        // Extract the text content safely
+                                                        let linkText = '';
+                                                        if (Array.isArray(children)) {
+                                                            linkText = children.map(c => typeof c === 'string' ? c : c?.props?.children || '').join('');
+                                                        } else {
+                                                            linkText = String(children);
+                                                        }
+
+                                                        // BULLETPROOF CHECK: Does the visible text contain our trigger phrase?
+                                                        if (linkText.includes('+ Add Task:')) {
+                                                            return (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(e) => {
+                                                                        e.preventDefault();
+                                                                        e.stopPropagation();
+
+                                                                        const currentTaskId = activeAiTask?.id;
+                                                                        console.log("⚡ [DEBUG] Tombol Emas Diklik! Title:", linkText, "Task ID:", currentTaskId);
+                                                                        handleCreateAiSubtask(linkText, currentTaskId);
+                                                                    }}
+                                                                    className="bg-clause-gold/10 hover:bg-clause-gold/30 text-clause-gold border border-clause-gold/50 px-3 py-1.5 rounded-lg text-xs font-semibold mt-2 mb-2 flex items-center gap-2 transition-all duration-200 shadow-sm cursor-pointer w-fit text-left"
+                                                                >
+                                                                    ⚡ {linkText}
+                                                                </button>
+                                                            );
+                                                        }
+
+                                                        // Fallback for normal links
+                                                        return <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline" onClick={(e) => e.preventDefault()} {...props}>{children}</a>;
+                                                    }
+                                                }}
+                                            >
+                                                {msg.content}
+                                            </ReactMarkdown>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
+
+                            {/* Premium Typing Indicator */}
+                            {isAiTyping && (
+                                <div className="bg-white/5 border border-white/10 self-start p-4 rounded-xl max-w-[85%] flex items-center gap-1.5 shadow-lg w-fit">
+                                    <div className="w-1.5 h-1.5 bg-clause-gold rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                                    <div className="w-1.5 h-1.5 bg-clause-gold rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                                    <div className="w-1.5 h-1.5 bg-clause-gold rounded-full animate-bounce"></div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Input Area */}
@@ -1081,8 +1196,9 @@ export default function TasksDashboardPage() {
 
                     </div>
                 </div>
-            )}
+            )
+            }
             {/* END: Task-Specific AI Chat Modal */}
-        </div>
+        </div >
     );
 }
