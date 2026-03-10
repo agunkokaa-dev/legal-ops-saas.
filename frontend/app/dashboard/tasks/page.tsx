@@ -24,7 +24,10 @@ import {
     FilePlus,
     Gavel,
     Trash2,
-    FileWarning
+    FileWarning,
+    Folder,
+    User,
+    Loader2
 } from "lucide-react";
 import Link from "next/link";
 
@@ -42,6 +45,7 @@ export default function TasksDashboardPage() {
     const [matters, setMatters] = useState<any[]>([]);
     const [selectedMatterId, setSelectedMatterId] = useState<string>('');
     const [selectedTask, setSelectedTask] = useState<any>(null);
+    const [isFetchingDetails, setIsFetchingDetails] = useState(false);
     const [inlineDraftMatterId, setInlineDraftMatterId] = useState<string | null>(null);
     const [inlineTitle, setInlineTitle] = useState("");
     const [taskDetails, setTaskDetails] = useState<{ checklists: any[]; attachments: any[]; logs: any[]; dependencies: any[] }>({ checklists: [], attachments: [], logs: [], dependencies: [] });
@@ -280,28 +284,43 @@ export default function TasksDashboardPage() {
     }, [tenantId]);
 
     // Fetch task details when a task is selected
-    const fetchTaskDetails = async () => {
-        if (!selectedTask || !session) return;
-        const supabase = await getAuthenticatedSupabase();
-        if (!supabase) return;
-
-        // Fetch traditional details (checklists, att, logs)
-        const [chk, att, log, subTasksRes] = await Promise.all([
-            supabase.from('task_checklists').select('*').eq('task_id', selectedTask.id).order('created_at'),
-            supabase.from('task_attachments').select('*').eq('task_id', selectedTask.id).order('created_at'),
-            supabase.from('activity_logs').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: false }),
-            supabase.from('sub_tasks').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: true })
-        ]);
-
-        setTaskDetails({ checklists: chk.data || [], attachments: att.data || [], logs: log.data || [], dependencies: [] });
-
-        // Also fetch the newer procedural steps templates
-        setProceduralSteps(subTasksRes.data || []);
-    };
-
     useEffect(() => {
-        fetchTaskDetails();
-    }, [selectedTask]);
+        if (selectedTask) {
+            // 🚨 1. INSTANT UI UPDATE (ZERO DELAY) 🚨
+            const fetchSilently = async () => {
+                const supabase = await getAuthenticatedSupabase();
+                if (!supabase) return;
+
+                // Fetch task to get matters joined and source details
+                const { data: taskData } = await supabase
+                    .from('tasks')
+                    .select('*, matters(title)')
+                    .eq('id', selectedTask.id)
+                    .single();
+
+                if (taskData) {
+                    setSelectedTask(prev => ({ ...prev, ...taskData }));
+                }
+
+                // Fetch traditional details (checklists, att, logs)
+                const [chk, att, log, subTasksRes] = await Promise.all([
+                    supabase.from('task_checklists').select('*').eq('task_id', selectedTask.id).order('created_at'),
+                    supabase.from('task_attachments').select('*').eq('task_id', selectedTask.id).order('created_at'),
+                    supabase.from('activity_logs').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: false }),
+                    supabase.from('sub_tasks').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: true })
+                ]);
+
+                setTaskDetails({ checklists: chk.data || [], attachments: att.data || [], logs: log.data || [], dependencies: [] });
+                setProceduralSteps(subTasksRes.data || []);
+            };
+
+            // 2. CLEAR ONLY THE CHECKLIST, BUT KEEP MIN-HEIGHT IN UI 🚨
+            setProceduralSteps([]);
+
+            // 3. FETCH THE REST IN THE BACKGROUND (SILENTLY)
+            fetchSilently();
+        }
+    }, [selectedTask?.id]);
 
     const handleToggleStep = async (stepId: string, newState: boolean) => {
         const supabase = await getAuthenticatedSupabase();
@@ -314,6 +333,27 @@ export default function TasksDashboardPage() {
         if (!error) {
             // Optimistic update
             setProceduralSteps(prev => prev.map(s => s.id === stepId ? { ...s, is_completed: newState } : s));
+        }
+    };
+
+    const handleDeleteSubTask = async (subTaskId: string) => {
+        const supabase = await getAuthenticatedSupabase();
+        if (!supabase) return;
+
+        try {
+            const { error } = await supabase
+                .from('sub_tasks')
+                .delete()
+                .eq('id', subTaskId);
+
+            if (error) throw error;
+
+            // Optimistic UI Update: Remove from local state immediately
+            setProceduralSteps(prev => prev.filter(s => s.id !== subTaskId));
+
+        } catch (error) {
+            console.error("Error deleting sub-task:", error);
+            toast.error("Failed to delete sub-task");
         }
     };
 
@@ -405,7 +445,7 @@ export default function TasksDashboardPage() {
         const supabase = await getAuthenticatedSupabase();
         if (!supabase) return;
         await supabase.from('task_checklists').update({ is_done: !currentState }).eq('id', chkId);
-        await fetchTaskDetails();
+        // The useEffect for selectedTask will handle the refresh
     };
 
     // File upload
@@ -427,7 +467,7 @@ export default function TasksDashboardPage() {
             });
             if (dbError) throw dbError;
 
-            await fetchTaskDetails();
+            // The useEffect for selectedTask will handle the refresh
         } catch (err) {
             console.error("Upload error:", err);
             alert("Failed to upload file.");
@@ -436,6 +476,17 @@ export default function TasksDashboardPage() {
 
     // Helper to group tasks by status
     const getTasksByStatus = (status: string) => tasks.filter(t => t.status === status);
+
+    // Dynamic metrics for widgets
+    const tasksThisWeekCount = getTasksByStatus('this_week').length;
+    const tasksUrgentCount = tasks.filter(t => t.priority === 'urgent' || t.priority === 'high').length;
+
+    const getMatterProgress = (matterId: string) => {
+        const matterTasks = tasks.filter(t => t.matter_id === matterId);
+        if (matterTasks.length === 0) return 0;
+        const completedTasks = matterTasks.filter(t => t.status === 'done');
+        return Math.round((completedTasks.length / matterTasks.length) * 100);
+    };
 
     return (
         <div className="flex-1 flex overflow-hidden bg-clause-black text-slate-300 font-sans h-full">
@@ -481,9 +532,9 @@ export default function TasksDashboardPage() {
                             <div className="flex-1">
                                 <h3 className="font-serif text-white text-sm">DAILY BRIEF</h3>
                                 <p className="text-xs text-clause-gold">
-                                    2 tasks auto-escalated to{" "}
-                                    <span className="font-bold underline">HIGH</span> priority by
-                                    Intelligence Engine based on court deadlines.
+                                    {tasksThisWeekCount > 0
+                                        ? <>{tasksThisWeekCount} task{tasksThisWeekCount > 1 ? 's' : ''} scheduled in your <span className="font-bold underline">THIS WEEK</span> pipeline.{tasksUrgentCount > 0 ? ` ${tasksUrgentCount} flagged as high priority.` : ''}</>
+                                        : <>Your pipeline for this week is clear. Great job!</>}
                                 </p>
                             </div>
                             <button
@@ -539,11 +590,11 @@ export default function TasksDashboardPage() {
                                                 {matter.title}
                                             </p>
                                             <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
-                                                <div className={`${barColor} h-full`} style={{ width: matter.claim_value ? '65%' : '0%' }}></div>
+                                                <div className={`${barColor} h-full transition-all duration-500 ease-out`} style={{ width: `${getMatterProgress(matter.id)}%` }}></div>
                                             </div>
                                             <div className="mt-2 flex justify-between text-[10px]">
                                                 <span className="opacity-50">Value: ${matter.claim_value?.toLocaleString() || '0'}</span>
-                                                <span className="text-white">{matter.claim_value ? '65%' : '0%'}</span>
+                                                <span className={`${textColor} font-bold`}>{getMatterProgress(matter.id)}%</span>
                                             </div>
                                         </div>
                                     );
@@ -824,6 +875,36 @@ export default function TasksDashboardPage() {
                                 </button>
                             </div>
                         </div>
+
+                        {/* 🚨 THE BILLION-DOLLAR BREADCRUMB 🚨 */}
+                        <div className="flex items-center gap-2 text-[10px] font-medium tracking-wide mb-3 flex-wrap">
+                            {/* Matter Pill */}
+                            <div className="flex items-center gap-1.5 text-gray-400 bg-white/5 px-2 py-1 rounded border border-white/5 cursor-pointer hover:bg-white/10 hover:text-white transition-colors">
+                                <Folder size={12} className="text-clause-gold" />
+                                <span className="truncate max-w-[150px]">
+                                    {selectedTask?.matters?.title || "Unknown Matter"}
+                                </span>
+                            </div>
+
+                            <span className="text-gray-600">•</span>
+
+                            {/* Source Document Pill */}
+                            {selectedTask?.is_ai_generated && selectedTask?.source_document_name ? (
+                                <div
+                                    className="flex items-center gap-1.5 text-clause-gold bg-clause-gold/10 px-2 py-1 rounded border border-clause-gold/20 cursor-pointer hover:bg-clause-gold/20 transition-colors"
+                                    title="Click to view source document"
+                                >
+                                    <FileText size={12} />
+                                    <span className="truncate max-w-[200px]">{selectedTask.source_document_name}</span>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-1.5 text-gray-500 bg-white/5 px-2 py-1 rounded border border-white/5">
+                                    <User size={12} />
+                                    <span>Manual Entry</span>
+                                </div>
+                            )}
+                        </div>
+
                         <h3 className="font-serif text-xl text-white leading-snug">
                             {selectedTask?.title || 'Task Details'}
                         </h3>
@@ -838,9 +919,11 @@ export default function TasksDashboardPage() {
                                 <option value="high" className="bg-clause-black">High Priority</option>
                                 <option value="urgent" className="bg-clause-black">Urgent</option>
                             </select>
-                            <span className="text-[9px] font-mono px-2 py-1 bg-clause-gold/10 text-clause-gold rounded border border-clause-gold/20 flex items-center gap-1">
-                                <ShieldCheck className="w-2.5 h-2.5" /> AI Verified
-                            </span>
+                            {selectedTask?.is_ai_generated && (
+                                <span className="text-[9px] font-mono px-2 py-1 bg-clause-gold/10 text-clause-gold rounded border border-clause-gold/20 flex items-center gap-1">
+                                    <ShieldCheck className="w-2.5 h-2.5" /> AI Verified
+                                </span>
+                            )}
                         </div>
                     </div>
 
@@ -875,108 +958,83 @@ export default function TasksDashboardPage() {
 
                         {/* Checklist */}
                         <div data-purpose="checklist">
-
-                            <div className="mb-6 border-b border-white/10 pb-4">
+                            <div className="mb-6 border-b border-white/10 pb-6 min-h-[150px]">
+                                {/* TITLE & PERCENTAGE TEXT */}
                                 <div className="flex justify-between items-center mb-4">
-                                    <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Procedural Steps</h4>
-                                    <span className="text-[10px] text-clause-gold">{proceduralSteps.filter(s => s.is_completed).length}/{proceduralSteps.length}</span>
+                                    <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Procedural Steps & Checklists</h4>
+                                    <span className="text-[10px] font-bold text-clause-gold">
+                                        {proceduralSteps.length === 0 ? 0 : Math.round((proceduralSteps.filter(s => s.is_completed).length / proceduralSteps.length) * 100)}%
+                                    </span>
                                 </div>
 
+                                {/* THE SLEEK PROGRESS BAR */}
+                                <div className="w-full h-0.5 bg-white/10 rounded-full mb-4 overflow-hidden">
+                                    <div
+                                        className="h-full bg-clause-gold transition-all duration-500 ease-out"
+                                        style={{ width: `${proceduralSteps.length === 0 ? 0 : Math.round((proceduralSteps.filter(s => s.is_completed).length / proceduralSteps.length) * 100)}%` }}
+                                    ></div>
+                                </div>
+
+                                {/* Dynamic List Rendering */}
                                 {proceduralSteps.length > 0 ? (
-                                    <ul className="space-y-3 mb-4">
+                                    <ul className="space-y-3 mb-4 animate-in fade-in duration-300">
                                         {proceduralSteps.map(step => (
-                                            <li key={step.id} className="flex items-start gap-3 text-sm text-gray-300">
+                                            <li key={step.id} className="flex items-start gap-3 group relative py-1">
                                                 <input
                                                     type="checkbox"
                                                     checked={step.is_completed}
-                                                    className="mt-1 accent-clause-gold w-4 h-4 cursor-pointer"
-                                                    onChange={() => handleToggleStep(step.id, !step.is_completed)}
+                                                    onChange={async () => await handleToggleStep(step.id, !step.is_completed)}
+                                                    className="mt-1 accent-clause-gold w-4 h-4 cursor-pointer rounded border-white/10 bg-white/5 shrink-0"
                                                 />
-                                                <span className={step.is_completed ? "line-through text-gray-600" : ""}>{step.title}</span>
+                                                <span className={`text-sm tracking-wide flex-1 transition-colors ${step.is_completed ? "line-through text-gray-600" : "text-gray-300"}`}>
+                                                    {step.title}
+                                                </span>
+
+                                                {/* DELETE BUTTON - Visible on hover */}
+                                                <button
+                                                    onClick={async () => await handleDeleteSubTask(step.id)}
+                                                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all cursor-pointer"
+                                                    title="Delete sub-task"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
                                             </li>
                                         ))}
                                     </ul>
                                 ) : (
-                                    <p className="text-xs text-gray-500 mb-4">No procedural steps defined.</p>
+                                    <p className="text-xs text-gray-500 mb-4 italic animate-in fade-in duration-300">No procedural steps defined.</p>
                                 )}
-                            </div>
 
-                            <div className="flex justify-between items-end mb-4">
-                                <p className="text-[10px] font-mono uppercase text-white/30 tracking-widest">
-                                    Ad-Hoc Checklists
-                                </p>
-                                <span className="text-[10px] font-mono text-clause-gold">
-                                    {taskDetails.checklists.length > 0
-                                        ? `${Math.round((taskDetails.checklists.filter((c: any) => c.is_done).length / taskDetails.checklists.length) * 100)}% Complete`
-                                        : '0%'}
-                                </span>
-                            </div>
-                            <div className="w-full h-1 bg-white/5 rounded-full mb-4 overflow-hidden">
-                                <div className="h-full bg-clause-gold" style={{ width: taskDetails.checklists.length > 0 ? `${Math.round((taskDetails.checklists.filter((c: any) => c.is_done).length / taskDetails.checklists.length) * 100)}%` : '0%' }}></div>
-                            </div>
-                            <div className="space-y-3">
-                                {taskDetails.checklists.length === 0 ? (
-                                    <p className="text-xs opacity-40">No procedural steps defined.</p>
-                                ) : (
-                                    taskDetails.checklists.map((chk: any) => (
-                                        <div key={chk.id} className="flex items-center justify-between group">
-                                            <label className="flex items-center gap-3 cursor-pointer">
-                                                <input
-                                                    checked={chk.is_done || false}
-                                                    onChange={async () => {
-                                                        const supabase = await getAuthenticatedSupabase();
-                                                        if (!supabase) return;
-                                                        await supabase.from('task_checklists').update({ is_done: !chk.is_done }).eq('id', chk.id);
-                                                        await fetchTaskDetails();
-                                                    }}
-                                                    className="gold-checkbox rounded-sm bg-transparent border-white/20 text-clause-gold focus:ring-0 focus:ring-offset-0"
-                                                    type="checkbox"
-                                                />
-                                                <span className={`text-xs ${chk.is_done ? 'line-through opacity-40' : 'text-white/80'}`}>
-                                                    {chk.item}
-                                                </span>
-                                            </label>
-                                            <button
-                                                onClick={async () => {
-                                                    const supabase = await getAuthenticatedSupabase();
-                                                    if (!supabase) return;
-                                                    await supabase.from('task_checklists').delete().eq('id', chk.id);
-                                                    await fetchTaskDetails();
-                                                }}
-                                                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-500 text-xs transition-opacity cursor-pointer"
-                                            >
-                                                ✕
-                                            </button>
-                                        </div>
-                                    ))
-                                )}
-                                <input
-                                    type="text"
-                                    placeholder="+ Add sub-task and press Enter"
-                                    value={newSubTask}
-                                    onChange={(e) => setNewSubTask(e.target.value)}
-                                    onKeyDown={async (e) => {
-                                        if (e.key === 'Enter' && newSubTask.trim() !== '') {
-                                            const supabase = await getAuthenticatedSupabase();
-                                            if (!supabase) return;
-                                            const { error } = await supabase
-                                                .from('task_checklists')
-                                                .insert({
-                                                    task_id: selectedTask.id,
-                                                    item: newSubTask.trim()
-                                                });
+                                {/* Ad-Hoc Input placed directly below the list */}
+                                <div className="relative mt-2">
+                                    <input
+                                        type="text"
+                                        placeholder="+ Add ad-hoc sub-task and press Enter"
+                                        value={newSubTask}
+                                        onChange={(e) => setNewSubTask(e.target.value)}
+                                        className="w-full bg-black/50 border border-white/10 rounded-lg p-2.5 text-xs text-white outline-none focus:border-clause-gold transition-colors placeholder:text-gray-600 placeholder:italic"
+                                        onKeyDown={async (e) => {
+                                            if (e.key === 'Enter' && newSubTask.trim() !== '') {
+                                                const supabase = await getAuthenticatedSupabase();
+                                                if (!supabase) return;
+                                                const { error } = await supabase
+                                                    .from('sub_tasks')
+                                                    .insert({
+                                                        task_id: selectedTask.id,
+                                                        title: newSubTask.trim(),
+                                                        is_completed: false
+                                                    });
 
-                                            if (error) {
-                                                console.error("❌ ERROR INSERTING SUB-TASK:", error);
-                                                alert("Failed to add sub-task. Check console.");
-                                            } else {
-                                                setNewSubTask(''); // Clear input
-                                                await fetchTaskDetails(); // Refresh the side panel UI immediately!
+                                                if (error) {
+                                                    console.error("❌ ERROR INSERTING SUB-TASK:", error);
+                                                    toast.error("Failed to add ad-hoc checklist");
+                                                } else {
+                                                    setNewSubTask(''); // Clear input
+                                                }
                                             }
-                                        }
-                                    }}
-                                    className="w-full bg-transparent border-b border-white/10 text-xs text-white focus:ring-0 px-0 py-1 outline-none placeholder:opacity-30 mt-2"
-                                />
+                                        }}
+                                    />
+                                </div>
                             </div>
                         </div>
 
