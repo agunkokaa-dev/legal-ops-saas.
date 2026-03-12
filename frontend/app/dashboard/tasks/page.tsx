@@ -120,7 +120,7 @@ export default function TasksDashboardPage() {
 
         try {
             // Change this URL if your FastAPI is running on a different port/address
-            const API_URL = 'http://127.0.0.1:8000/api/v1/ai/task-assistant';
+            const API_URL = 'http://173.212.240.143:8000/api/v1/ai/task-assistant';
 
             const response = await fetch(API_URL, {
                 method: 'POST',
@@ -283,42 +283,42 @@ export default function TasksDashboardPage() {
         fetchTasks();
     }, [tenantId]);
 
+    const fetchTaskDetails = async () => {
+        if (!selectedTask?.id) return;
+        const supabase = await getAuthenticatedSupabase();
+        if (!supabase) return;
+
+        // Fetch task to get matters joined and source details
+        const { data: taskData } = await supabase
+            .from('tasks')
+            .select('*, matters(title)')
+            .eq('id', selectedTask.id)
+            .single();
+
+        if (taskData) {
+            setSelectedTask((prev: any) => ({ ...prev, ...taskData }));
+        }
+
+        // Fetch traditional details (checklists, att, logs)
+        const [chk, att, log, subTasksRes] = await Promise.all([
+            supabase.from('task_checklists').select('*').eq('task_id', selectedTask.id).order('created_at'),
+            supabase.from('task_attachments').select('*').eq('task_id', selectedTask.id).order('created_at'),
+            supabase.from('activity_logs').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: false }),
+            supabase.from('sub_tasks').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: true })
+        ]);
+
+        setTaskDetails({ checklists: chk.data || [], attachments: att.data || [], logs: log.data || [], dependencies: [] });
+        setProceduralSteps(subTasksRes.data || []);
+    };
+
     // Fetch task details when a task is selected
     useEffect(() => {
-        if (selectedTask) {
-            // 🚨 1. INSTANT UI UPDATE (ZERO DELAY) 🚨
-            const fetchSilently = async () => {
-                const supabase = await getAuthenticatedSupabase();
-                if (!supabase) return;
-
-                // Fetch task to get matters joined and source details
-                const { data: taskData } = await supabase
-                    .from('tasks')
-                    .select('*, matters(title)')
-                    .eq('id', selectedTask.id)
-                    .single();
-
-                if (taskData) {
-                    setSelectedTask(prev => ({ ...prev, ...taskData }));
-                }
-
-                // Fetch traditional details (checklists, att, logs)
-                const [chk, att, log, subTasksRes] = await Promise.all([
-                    supabase.from('task_checklists').select('*').eq('task_id', selectedTask.id).order('created_at'),
-                    supabase.from('task_attachments').select('*').eq('task_id', selectedTask.id).order('created_at'),
-                    supabase.from('activity_logs').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: false }),
-                    supabase.from('sub_tasks').select('*').eq('task_id', selectedTask.id).order('created_at', { ascending: true })
-                ]);
-
-                setTaskDetails({ checklists: chk.data || [], attachments: att.data || [], logs: log.data || [], dependencies: [] });
-                setProceduralSteps(subTasksRes.data || []);
-            };
-
+        if (selectedTask?.id) {
             // 2. CLEAR ONLY THE CHECKLIST, BUT KEEP MIN-HEIGHT IN UI 🚨
             setProceduralSteps([]);
 
             // 3. FETCH THE REST IN THE BACKGROUND (SILENTLY)
-            fetchSilently();
+            fetchTaskDetails();
         }
     }, [selectedTask?.id]);
 
@@ -497,7 +497,7 @@ export default function TasksDashboardPage() {
                     className="h-16 flex-shrink-0 flex items-center justify-between px-8 border-b border-white/5 bg-black/20"
                     data-purpose="main-topbar"
                 >
-                    <h2 className="font-serif text-lg text-white">Task Management Dashboard</h2>
+                    <h2 className="font-serif text-lg text-white">Task Management</h2>
                     <div className="flex items-center gap-6">
                         <div className="relative w-64">
                             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />

@@ -4,11 +4,14 @@ import { useState, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useUser } from '@clerk/nextjs'
 import ReactMarkdown from 'react-markdown'
+import { useRouter } from 'next/navigation'
+import { FileText } from 'lucide-react'
 
 interface Message {
     id: string;
     role: 'user' | 'ai';
     content: string;
+    citations?: { contract_id: string; file_name?: string }[];
 }
 
 export default function ClauseAssistant({
@@ -29,6 +32,13 @@ export default function ClauseAssistant({
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const router = useRouter();
+
+    const processContent = (text: string) => {
+        if (!text) return '';
+        // Convert filenames into markdown links so ReactMarkdown parses them as `a` tags
+        return text.replace(/\[?([a-zA-Z0-9_.-]+\.(?:pdf|docx|txt))\]?(?!\()/gi, '[$1](/dashboard/documents/$1)');
+    };
 
     // Auto-scroll to bottom of chat
     const scrollToBottom = () => {
@@ -56,15 +66,15 @@ export default function ClauseAssistant({
             // Add temporary AI loading message
             setMessages(prev => [...prev, { id: 'loading', role: 'ai', content: '...' }]);
 
-            const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://173.212.240.143:8000';
-            const response = await fetch(`${backendUrl}/api/chat/clause-assistant`, {
+            const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+            const response = await fetch(`${backendUrl}/api/v1/ai/task-assistant`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    message: userMsg,
-                    contractId,
-                    matterId,
-                    userId: user?.id
+                    tenant_id: user?.id || "unknown_tenant",
+                    matter_id: matterId || "general",
+                    task_id: "general_chat",
+                    message: userMsg
                 })
             });
 
@@ -81,7 +91,8 @@ export default function ClauseAssistant({
             setMessages(prev => [...prev, {
                 id: Date.now().toString(),
                 role: 'ai',
-                content: String(botReply)
+                content: String(botReply),
+                citations: data?.citations || data?.sources || []
             }]);
             setIsLoading(false);
 
@@ -122,8 +133,39 @@ export default function ClauseAssistant({
                                     <div className="w-1.5 h-1.5 rounded-full bg-lux-gold animate-bounce" style={{ animationDelay: '300ms' }} />
                                 </div>
                             ) : msg.role === 'ai' ? (
-                                <div className="prose prose-invert prose-sm max-w-none leading-relaxed prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5">
-                                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                <div className="text-sm text-gray-200 leading-relaxed space-y-3">
+                                    <ReactMarkdown 
+                                        components={{
+                                            p: ({node, ...props}) => <p className="mb-2" {...props} />,
+                                            strong: ({node, ...props}) => <strong className="font-bold text-white tracking-wide" {...props} />,
+                                            ul: ({node, ...props}) => <ul className="list-none pl-1 space-y-2 mb-3" {...props} />,
+                                            ol: ({node, ...props}) => <ol className="list-decimal pl-4 space-y-2 mb-3" {...props} />,
+                                            li: ({node, ...props}) => <li className="leading-relaxed" {...props} />,
+                                            a: ({node, href, children, ...props}) => {
+                                                const linkText = String(children);
+                                                if (linkText.match(/\.(?:pdf|docx|txt)$/i) || href?.includes('/dashboard/documents/')) {
+                                                    const matchedSource = msg.citations?.find((cite: any) => 
+                                                        cite.file_name === linkText || cite.contract_id === linkText
+                                                    );
+                                                    const targetId = matchedSource ? matchedSource.contract_id : linkText;
+
+                                                    return (
+                                                        <span
+                                                            onClick={() => router.push(`/dashboard/contracts/${encodeURIComponent(targetId)}`)}
+                                                            className="inline-flex items-center gap-1 bg-clause-gold/10 text-clause-gold border border-clause-gold/30 px-2 py-1 mx-1 rounded text-xs font-bold cursor-pointer hover:bg-clause-gold/20 hover:scale-105 transition-all shadow-sm shadow-clause-gold/10"
+                                                            title={`Open Document: ${linkText}`}
+                                                        >
+                                                            <FileText size={12} className="shrink-0" />
+                                                            {linkText}
+                                                        </span>
+                                                    );
+                                                }
+                                                return <a href={href} className="text-blue-400 hover:underline" {...props}>{children}</a>;
+                                            }
+                                        }}
+                                    >
+                                        {processContent(msg.content)}
+                                    </ReactMarkdown>
                                 </div>
                             ) : (
                                 <p className="whitespace-pre-wrap">{msg.content}</p>

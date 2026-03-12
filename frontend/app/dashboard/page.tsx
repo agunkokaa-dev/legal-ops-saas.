@@ -5,7 +5,6 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 import { syncProfile } from '@/app/actions/syncProfile'
 import { createClient } from '@supabase/supabase-js'
-import DocumentUpload from '@/components/DocumentUpload'
 import DocumentList from '@/components/DocumentList'
 export default async function DashboardPage() {
     const { userId, orgId, getToken } = await auth()
@@ -24,6 +23,10 @@ export default async function DashboardPage() {
     let highRiskCount = 0
     let mediumRiskCount = 0
     let lowRiskCount = 0
+
+    // Practice Area aggregations for Active Matters
+    const practiceAreas = { CORP: 0, IP: 0, LITIG: 0, RE: 0, OTHER: 0 }
+    let maxPracticeAreaCount = 0;
 
     const parseContractValue = (valStr: string | null): number => {
         if (!valStr || valStr.toLowerCase().includes("tidak")) return 0
@@ -73,9 +76,36 @@ export default async function DashboardPage() {
                 } else if (error) {
                     console.error("Error fetching documents:", error.message || JSON.stringify(error))
                 }
+
+                // Fetch Matters for the Active Matters Chart
+                const { data: mattersData, error: mattersError } = await supabaseAdmin
+                    .from('matters')
+                    .select('practice_area')
+                    .eq('tenant_id', tenantId)
+                    .neq('status', 'Closed')
+
+                if (!mattersError && mattersData) {
+                    mattersData.forEach(matter => {
+                        const area = matter.practice_area ? matter.practice_area.toUpperCase().trim() : 'OTHER'
+                        
+                        // Map specific keys or dump to OTHER if not matched
+                        if (area.includes('CORP')) practiceAreas.CORP++
+                        else if (area.includes('IP') || area.includes('INTELLECTUAL')) practiceAreas.IP++
+                        else if (area.includes('LITIG')) practiceAreas.LITIG++
+                        else if (area.includes('RE') || area.includes('REAL ESTATE')) practiceAreas.RE++
+                        else practiceAreas.OTHER++
+                    })
+
+                    // Find the max to calculate relative percentage heights. 
+                    maxPracticeAreaCount = Math.max(
+                        practiceAreas.CORP, practiceAreas.IP, practiceAreas.LITIG, practiceAreas.RE, 1
+                    ) // Ensure we never divide by 0
+                } else if (mattersError) {
+                    console.error("Error fetching matters:", mattersError.message)
+                }
             }
         } catch (e: any) {
-            console.error("Exception fetching documents:", e.message || JSON.stringify(e))
+            console.error("Exception fetching data:", e.message || JSON.stringify(e))
         }
     }
     const formattedPortfolioValue = new Intl.NumberFormat('en-US', {
@@ -92,7 +122,9 @@ export default async function DashboardPage() {
     return (
         <>
             <header className="h-16 border-b border-surface-border bg-surface/50 backdrop-blur-sm flex items-center justify-between px-8 shrink-0">
-                <h1 className="font-display text-2xl text-white font-light tracking-tight">Executive Command</h1>
+                <h1 className="font-display text-2xl text-white font-light tracking-tight">
+                    Hello, {user?.firstName || 'Partner'}!
+                </h1>
                 <div className="flex items-center gap-4">
                     <div className="relative">
                         <span className="material-symbols-outlined text-text-muted hover:text-white cursor-pointer">notifications</span>
@@ -105,28 +137,6 @@ export default async function DashboardPage() {
 
             <div className="flex-1 overflow-y-auto p-8 scroll-smooth">
                 <div className="max-w-7xl mx-auto flex flex-col gap-6">
-
-                    {/* Clerk / Supabase Status Banner */}
-                    {!orgId ? (
-                        <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 rounded flex gap-3 items-start">
-                            <span className="material-symbols-outlined mt-0.5">warning</span>
-                            <div>
-                                <p className="font-bold text-sm">No Active Tenant</p>
-                                <p className="text-xs mt-1 text-yellow-500/80">Use the Organization selector in the sidebar to create or join a Tenant.</p>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="p-4 bg-green-500/10 border border-green-500/30 text-green-500 rounded flex gap-3 items-start">
-                            <span className="material-symbols-outlined mt-0.5">check_circle</span>
-                            <div>
-                                <p className="font-bold text-sm">Supabase RLS Connected</p>
-                                <p className="text-xs mt-1 text-green-500/80">Active Tenant ID: <code className="bg-green-500/20 px-1 py-0.5 rounded">{orgId}</code></p>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Secure File Upload Vault */}
-                    {orgId && <DocumentUpload />}
 
                     {/* Bento Grid */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -188,27 +198,39 @@ export default async function DashboardPage() {
                                 <button className="text-xs text-primary border border-primary/30 px-2 py-1 rounded hover:bg-primary/10">View All</button>
                             </div>
                             <div className="flex-1 flex items-end justify-between gap-4 px-2 pb-2">
-                                <div className="flex flex-col items-center gap-2 flex-1 group">
+                                <div className="flex flex-col items-center gap-2 flex-1 group" title={`Corp: ${practiceAreas.CORP}`}>
                                     <div className="w-full bg-surface-border relative h-40 rounded-t-sm overflow-hidden">
-                                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 h-[80%] group-hover:to-primary/60 transition-all"></div>
+                                        <div 
+                                            className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 group-hover:to-primary/60 transition-all duration-1000"
+                                            style={{ height: `${(practiceAreas.CORP / maxPracticeAreaCount) * 100}%` }}
+                                        ></div>
                                     </div>
                                     <span className="text-[10px] uppercase tracking-wide text-text-muted">Corp</span>
                                 </div>
-                                <div className="flex flex-col items-center gap-2 flex-1 group">
+                                <div className="flex flex-col items-center gap-2 flex-1 group" title={`IP: ${practiceAreas.IP}`}>
                                     <div className="w-full bg-surface-border relative h-40 rounded-t-sm overflow-hidden">
-                                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 h-[65%] group-hover:to-primary/60 transition-all"></div>
+                                        <div 
+                                            className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 group-hover:to-primary/60 transition-all duration-1000"
+                                            style={{ height: `${(practiceAreas.IP / maxPracticeAreaCount) * 100}%` }}
+                                        ></div>
                                     </div>
                                     <span className="text-[10px] uppercase tracking-wide text-text-muted">IP</span>
                                 </div>
-                                <div className="flex flex-col items-center gap-2 flex-1 group">
+                                <div className="flex flex-col items-center gap-2 flex-1 group" title={`Litigation: ${practiceAreas.LITIG}`}>
                                     <div className="w-full bg-surface-border relative h-40 rounded-t-sm overflow-hidden">
-                                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 h-[90%] group-hover:to-primary/60 transition-all"></div>
+                                        <div 
+                                            className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 group-hover:to-primary/60 transition-all duration-1000"
+                                            style={{ height: `${(practiceAreas.LITIG / maxPracticeAreaCount) * 100}%` }}
+                                        ></div>
                                     </div>
                                     <span className="text-[10px] uppercase tracking-wide text-text-muted">Litig</span>
                                 </div>
-                                <div className="flex flex-col items-center gap-2 flex-1 group">
+                                <div className="flex flex-col items-center gap-2 flex-1 group" title={`Real Estate: ${practiceAreas.RE}`}>
                                     <div className="w-full bg-surface-border relative h-40 rounded-t-sm overflow-hidden">
-                                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 h-[45%] group-hover:to-primary/60 transition-all"></div>
+                                        <div 
+                                            className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-primary/80 to-primary/40 group-hover:to-primary/60 transition-all duration-1000"
+                                            style={{ height: `${(practiceAreas.RE / maxPracticeAreaCount) * 100}%` }}
+                                        ></div>
                                     </div>
                                     <span className="text-[10px] uppercase tracking-wide text-text-muted">RE</span>
                                 </div>

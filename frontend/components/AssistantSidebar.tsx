@@ -5,6 +5,7 @@ import { chatWithClause } from '@/app/actions/backend'
 import { Sparkles, Command, User, Send, FileText } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useRouter } from 'next/navigation'
 
 interface Message {
     id: string
@@ -24,6 +25,13 @@ export default function AssistantSidebar() {
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const messagesEndRef = useRef<HTMLDivElement>(null)
+    const router = useRouter()
+
+    const processContent = (text: string) => {
+        if (!text) return '';
+        // Convert filenames into markdown links so ReactMarkdown parses them as `a` tags
+        return text.replace(/\[?([a-zA-Z0-9_.-]+\.(?:pdf|docx|txt))\]?(?!\()/gi, '[$1](/dashboard/documents/$1)');
+    };
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -75,9 +83,38 @@ export default function AssistantSidebar() {
                                 : 'bg-primary/10 rounded-2xl border border-primary/20 text-white'
                                 }`}>
                                 {msg.role === 'assistant' ? (
-                                    <div className="prose prose-invert prose-sm max-w-none text-gray-300 [&>p]:mb-2 last:[&>p]:mb-0 [&>ul]:mt-1 [&>ul]:mb-2 [&>li]:my-0.5">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                            {msg.content}
+                                    <div className="text-sm text-gray-200 leading-relaxed space-y-3">
+                                        <ReactMarkdown 
+                                            components={{
+                                                p: ({node, ...props}) => <p className="mb-2" {...props} />,
+                                                strong: ({node, ...props}) => <strong className="font-bold text-white tracking-wide" {...props} />,
+                                                ul: ({node, ...props}) => <ul className="list-none pl-1 space-y-2 mb-3" {...props} />,
+                                                ol: ({node, ...props}) => <ol className="list-decimal pl-4 space-y-2 mb-3" {...props} />,
+                                                li: ({node, ...props}) => <li className="leading-relaxed" {...props} />,
+                                                a: ({node, href, children, ...props}) => {
+                                                    const linkText = String(children);
+                                                    if (linkText.match(/\.(?:pdf|docx|txt)$/i) || href?.includes('/dashboard/documents/')) {
+                                                        const matchedSource = msg.citations?.find((cite: any) => 
+                                                            cite.file_name === linkText || cite.contract_id === linkText
+                                                        );
+                                                        const targetId = matchedSource ? matchedSource.contract_id : linkText;
+
+                                                        return (
+                                                            <span
+                                                                onClick={() => router.push(`/dashboard/contracts/${encodeURIComponent(targetId)}`)}
+                                                                className="inline-flex items-center gap-1 bg-clause-gold/10 text-clause-gold border border-clause-gold/30 px-2 py-1 mx-1 rounded text-xs font-bold cursor-pointer hover:bg-clause-gold/20 hover:scale-105 transition-all shadow-sm shadow-clause-gold/10"
+                                                                title={`Open Document: ${linkText}`}
+                                                            >
+                                                                <FileText size={12} className="shrink-0" />
+                                                                {linkText}
+                                                            </span>
+                                                        );
+                                                    }
+                                                    return <a href={href} className="text-blue-400 hover:underline" {...props}>{children}</a>;
+                                                }
+                                            }}
+                                        >
+                                            {processContent(msg.content)}
                                         </ReactMarkdown>
                                     </div>
                                 ) : (
@@ -92,7 +129,10 @@ export default function AssistantSidebar() {
                                         return (
                                             <button
                                                 key={idx}
-                                                onClick={() => console.log('View Source:', cite.contract_id)}
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    router.push(`/dashboard/contracts/${cite.contract_id}`);
+                                                }}
                                                 className="flex items-center gap-1.5 bg-surface-border/60 hover:bg-primary/20 border border-surface-border text-[10px] text-text-muted hover:text-primary px-2 py-1 rounded-full transition-colors cursor-pointer"
                                                 title={`Contract ID: ${cite.contract_id}`}
                                             >

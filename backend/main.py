@@ -94,6 +94,50 @@ class TaskAssistantRequest(BaseModel):
     task_id: str
     message: str
 
+# =====================================================================
+# AGENTIC TOOL DEFINITIONS (Function Calling)
+# =====================================================================
+
+def get_user_tasks(tenant_id: str, status_filter: str = "open"):
+    """
+    Fetches the user's active tasks from Supabase, joined with matter names.
+    Used as a Tool by the LLM when the user asks about their tasks/schedule.
+    """
+    try:
+        response = supabase.table("tasks").select("id, title, status, priority, due_date, matter_id, matters(name)").eq("tenant_id", tenant_id).neq("status", "done").order("created_at", desc=True).execute()
+
+        tasks = response.data
+        if not tasks:
+            return "No active tasks found for this tenant."
+
+        task_summary = f"Found {len(tasks)} active task(s):\n"
+        for t in tasks:
+            matter_info = t.get("matters")
+            matter_name = matter_info.get("name", "Unknown Matter") if isinstance(matter_info, dict) else "Unknown Matter"
+            priority = t.get("priority", "normal")
+            due = t.get("due_date", "No deadline")
+            task_summary += f"- [{t['status'].upper()}] {t['title']} | Matter: {matter_name} | Priority: {priority} | Due: {due}\n"
+
+        return task_summary
+    except Exception as e:
+        print(f"get_user_tasks Error: {e}")
+        return f"Error fetching tasks: {str(e)}"
+
+GET_TASKS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_user_tasks",
+        "description": "Fetch the user's tasks. Call this if the user asks 'apa tugasku', 'jadwal hari ini', 'my tasks', or anything related to to-do lists, daily briefs, or pending work.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }
+}
+
+AGENT_TOOLS = [GET_TASKS_TOOL]
+
 @app.post("/api/playbook/vectorize")
 async def vectorize_playbook_rule(request: PlaybookRuleRequest):
     try:
@@ -896,9 +940,10 @@ async def ask_clause_assistant(req: TaskAssistantRequest):
         except Exception as e:
             print(f"Warning: Failed to search 'id_national_laws'. {e}")
 
-        # 5. INJECT ACTIONABLE SILENT LUXURY SYSTEM PROMPT
-        system_prompt = f"""You are Clause, a highly paid Senior Legal Counsel Assistant at an elite Indonesian law firm.
+        # 5. AGENTIC SYSTEM PROMPT WITH TOOL AWARENESS
+        system_prompt = f"""You are Pariana, an elite Legal Executive Assistant at a top-tier Indonesian law firm.
 Your primary goal is to help the user complete their CURRENT TASK based on the provided Matter documents and National Laws.
+You also have access to TOOLS. If the user asks about their tasks, schedule, daily brief, or to-do list, you MUST call the `get_user_tasks` tool to fetch live data from the database. Do NOT guess or make up task lists.
 
 CRITICAL INSTRUCTIONS (SILENT LUXURY FORMAT):
 1. NEVER use conversational filler, greetings, opening narratives, or polite closing paragraphs (e.g., 'Semoga membantu', 'Berikut adalah...'). Start immediately with the headers.
@@ -912,32 +957,85 @@ CRITICAL INSTRUCTIONS (SILENT LUXURY FORMAT):
 - **Tenggat Waktu:** [If applicable, otherwise omit]
 - **Sumber:** [Exact Document Name, Pasal/Clause]
 
-[ 2] **[Obligation Category/Name]**
-- **Kewajiban:** [Brief, sharp description]
-- **Tenggat Waktu:** [If applicable, otherwise omit]
-- **Sumber:** [Exact Document Name, Pasal/Clause]
-
-
 ⚡ **RECOMMENDED NEXT STEPS (ACTIONABLE)**
 For EVERY recommended next step, you MUST format it strictly as a Markdown link with the exact href (#add-task)`. Do not use standard text.
 Example format:
 - [+ Add Task: Validasi penerimaan Invoice fisik dari vendor](action:add-task)
 - [+ Add Task: Jadwalkan UAT untuk fitur Scan Barcode](action:add-task)
 
+If the user asks about their tasks or schedule, present the tool results in a beautiful, structured format with clear status indicators and priorities.
+
+When summarizing or listing contracts (e.g., dangerous contracts or portfolio analysis), you MUST use this exact elegant Markdown format:
+
+Berdasarkan analisis portofolio Anda, terdapat dokumen dengan kategori risiko tinggi, yaitu:
+
+**[Nama File Dokumen.pdf]**
+- **Risk Level:** [HIGH/MEDIUM/LOW]
+- **Ringkasan Konten:** [Berikan ringkasan eksekutif secara singkat dan padat di sini]
+
+(Add a clear empty line \n\n between documents)
+
+**[Nama File Dokumen 2.pdf]**
+- **Risk Level:** [HIGH/MEDIUM/LOW]
+- **Ringkasan Konten:** [Ringkasan...]
+
+Ensure proper double line breaks (`\n\n`) between paragraphs so the UI renders clear spacing. Never output a dense wall of text.
+
 Context retrieved from Database:
 {combined_context}
 """
         
-        # 6. GENERATE RESPONSE
-        response = openai_client.chat.completions.create(
+        # 6. FIRST LLM CALL — WITH TOOLS
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": req.message}
+        ]
+
+        print("🧠 [AGENTIC] First LLM call with tools...")
+        first_response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": req.message}
-            ]
+            messages=messages,
+            tools=AGENT_TOOLS,
+            tool_choice="auto"
         )
 
-        return {"reply": response.choices[0].message.content}
+        response_message = first_response.choices[0].message
+
+        # 7. CHECK IF LLM DECIDED TO CALL A TOOL
+        if response_message.tool_calls:
+            print(f"🔧 [AGENTIC] LLM invoked {len(response_message.tool_calls)} tool(s)")
+            
+            # Append the assistant's decision to messages
+            messages.append(response_message)
+
+            for tool_call in response_message.tool_calls:
+                function_name = tool_call.function.name
+                print(f"   → Tool: {function_name}")
+
+                if function_name == "get_user_tasks":
+                    function_response = get_user_tasks(tenant_id=req.tenant_id)
+                else:
+                    function_response = f"Unknown tool: {function_name}"
+
+                # Append the tool result
+                messages.append({
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": function_name,
+                    "content": function_response,
+                })
+
+            # 8. SECOND LLM CALL — Format the raw DB data elegantly
+            print("🧠 [AGENTIC] Second LLM call to format tool results...")
+            final_response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages
+            )
+            return {"reply": final_response.choices[0].message.content}
+        else:
+            # No tool was called — standard RAG response
+            print("📄 [AGENTIC] No tool invoked, returning standard RAG response.")
+            return {"reply": response_message.content}
 
     except Exception as e:
         print(f"Task Assistant RAG Error: {e}")
